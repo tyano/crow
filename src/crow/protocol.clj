@@ -97,6 +97,8 @@
         expire-at   (-> (unpack ms-data) (bytes->date))]
     (Registration. service-id expire-at)))
 
+(defn registration [service-id expire-at] (Registration. service-id expire-at))
+
 
 (defrecord HeartBeat [^String service-id])
 
@@ -108,6 +110,8 @@
   (let [data ^bytes (:data ext)
         service-id (unpack data)]
     (HeartBeat. service-id)))
+
+(defn heart-beat [service-id] (HeartBeat. service-id))
 
 
 (defrecord Lease [expire-at])
@@ -121,6 +125,9 @@
         expire-at   (-> (unpack data) (bytes->date))]
     (Lease. expire-at)))
 
+(defn lease [expire-at] (Lease. expire-at))
+
+
 
 (defrecord LeaseExpired [service-id])
 
@@ -133,6 +140,8 @@
         service-id (unpack data)]
     (LeaseExpired. service-id)))
 
+(defn lease-expired [service-id] (LeaseExpired. service-id))
+
 
 (defrecord InvalidMessage [msg])
 
@@ -143,6 +152,8 @@
   [ext]
   (let [data ^bytes (:data ext)]
     (InvalidMessage. (unpack data))))
+
+(defn invalid-message [msg] (InvalidMessage. msg))
 
 
 

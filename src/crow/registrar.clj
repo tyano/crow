@@ -1,7 +1,7 @@
 (ns crow.registrar
   (:require [aleph.tcp :refer [start-server] :as tcp]
             [clj-time.core :refer [now after?] :as t]
-            [crow.protocol :refer [->Lease ->LeaseExpired ->Registration ->InvalidMessage
+            [crow.protocol :refer [lease lease-expired registration invalid-message
                                    unpack-message join-request? heart-beat?] :as p]
             [clojure.core.async :refer [go-loop chan <! onto-chan thread]]
             [manifold.stream :refer [put! take!] :as s]
@@ -28,7 +28,7 @@
   (let [service-id (new-service-id)
         services   (swap! (:services registrar) #(assoc % service-id (now)))
         expire-at  (services service-id)]
-    (->Registration service-id expire-at)))
+    (registration service-id expire-at)))
 
 
 (defn accept-heartbeat
@@ -40,8 +40,8 @@
                         service-map)))
         expire-at (services service-id)]
     (if expire-at
-      (->Lease expire-at)
-      (->LeaseExpired service-id))))
+      (lease expire-at)
+      (lease-expired service-id))))
 
 (defn service-expired
   [registrar service-id]
@@ -79,7 +79,7 @@
         result (cond
                   (join-request? msg) (accept-service-registration registrar)
                   (heart-beat? msg)   (accept-heartbeat registrar (:service-id msg))
-                  :else               (->InvalidMessage msg))]
+                  :else               (invalid-message msg))]
     (put! stream (pack result))))
 
 

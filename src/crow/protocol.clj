@@ -66,21 +66,20 @@
   (fn [ext] (:type ext)))
 
 
-(defrecord JoinRequest [^String ip-address])
+(defrecord JoinRequest [^String service-id])
 
 (defext JoinRequest type-join-request [ent]
-  (-> (InetAddress/getByName (:ip-address ent))
-      (.getAddress)))
+  (pack (:service-id ent)))
 
 (defmethod restore-ext type-join-request
   [ext]
-  (let [data    ^bytes (:data ext)
-        address ^InetAddress (InetAddress/getByAddress data)]
-    (JoinRequest. (.getHostAddress address))))
+  (let [data ^bytes (:data ext)
+        service-id (unpack data)]
+    (JoinRequest. service-id)))
 
 (defn join-request
-  [^String ip-address]
-  (JoinRequest. ip-address))
+  [^String service-id]
+  (JoinRequest. service-id))
 
 
 

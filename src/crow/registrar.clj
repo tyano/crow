@@ -25,8 +25,8 @@
   (str (UUID/randomUUID)))
 
 (defn accept-service-registration
-  [registrar]
-  (let [service-id (new-service-id)
+  [registrar sid]
+  (let [service-id (or sid (new-service-id))
         services   (swap! (:services registrar) #(assoc % service-id (now)))
         expire-at  (services service-id)]
     (registration service-id expire-at)))
@@ -78,7 +78,7 @@
   (let [data   (take! stream)
         msg    (unpack-message data)
         result (cond
-                  (join-request? msg) (accept-service-registration registrar)
+                  (join-request? msg) (accept-service-registration registrar (:service-id msg))
                   (heart-beat? msg)   (accept-heartbeat registrar (:service-id msg))
                   :else               (invalid-message msg))]
     (put! stream (pack result))))

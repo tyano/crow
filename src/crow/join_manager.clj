@@ -21,7 +21,7 @@
 (defn- join-service!
   "send a join request to a registrar and get a new service-id"
   [join-mgr service registrar-address registrar-port]
-  (let [req (join-request (:ip-address service))
+  (let [req (join-request (service-id service))
         msg (send-request registrar-address registrar-port req)]
     (when (registration? msg)
       (swap! (:service-id-atom service)

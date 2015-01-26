@@ -1,6 +1,5 @@
 (ns crow.registrar
   (:require [aleph.tcp :refer [start-server] :as tcp]
-
             [manifold.stream :refer [put! take!] :as s]
             [manifold.deferred :as d]
             [clj-time.core :refer [now after?] :as t]

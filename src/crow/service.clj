@@ -1,11 +1,12 @@
 (ns crow.service
-  (:require [aleph.tcp :refer [put! take!] :as tcp]
+  (:require [manifold.stream :refer [put! take!] :as s]
+            [aleph.tcp :refer [start-server] :as tcp]
             [manifold.deferred :refer [let-flow] :as d]
             [crow.protocol :refer [join-request heart-beat
                                    lease? lease-expired? registration?
                                    unpack-message] :as protocol]
             [crow.registrar-source :as source]
-            [clojure.core.async [chan thread go-loop <! onto-chan] :as async]
+            [clojure.core.async :refer [chan thread go-loop <! >! onto-chan] :as async]
             [clojure.set :refer [difference]]))
 
 
@@ -14,7 +15,7 @@
 
 (defn new-service
   [ip-address]
-  (Service. ip-address (atom nil) (atom [])))
+  (Service. ip-address (atom nil) (atom nil) (atom [])))
 
 (defn service-id
   [service]
@@ -26,7 +27,7 @@
 
 (defn- send-request
   [registrar-address registrar-port req]
-  (let-flow [stream (tcp/client {:host registrar-address, :post registrar-port})]
+  (let [stream @(tcp/client {:host registrar-address, :post registrar-port})]
     (put! stream req)
     (let [resp (take! stream)]
       (unpack-message resp))))
@@ -34,23 +35,30 @@
 ;;;TODO service-idはクライアント側からも指定できること。
 (defn join-service
   "send a join request to a registrar and get a new service-id"
-  [service registrar-address registrar-port]
+  [join-mgr service registrar-address registrar-port]
   (let [req (join-request (:ip-address service))
         msg (send-request registrar-address registrar-port req)]
     (when (registration? msg)
-      (swap! (:service-id-atom service) (fn [id] (or id (:service-id msg)))))))
+      (swap! (:service-id-atom service)
+        (fn [id] (or id (:service-id msg))))
+      (swap! (:service-map join-mgr)
+        (fn [service-map]
+          (update-in service-map [service]
+            (fn [regs]
+              (conj regs {:address registrar-address, :port registrar-port}))))))))
 
+(declare join)
 
 (defn send-heart-beat
-  [service registrar-address registrar-port]
+  [service service-ch registrar-address registrar-port]
   (let [req (heart-beat (service-id service))]
-    (let-flow [stream (tcp/client {:host registrar-address, :post registrar-port})]
+    (let [stream @(tcp/client {:host registrar-address, :post registrar-port})]
       (put! stream req)
       (let [resp (take! stream)
             msg  (send-request registrar-address registrar-port req)]
         (cond
           (lease? msg) (swap! (:expire-at-atom service) (fn [_] (:expire-at msg)))
-          (lease-expired? msg) msg)))))
+          (lease-expired? msg) (join service-ch service))))))
 
 
 ;;; registrars - a vector of registrar-info, which is a map with :address and :port of a registrar.
@@ -71,14 +79,14 @@
   [join-mgr registrars]
   (swap! (deref (:registrars join-mgr)) (fn [_] registrars)))
 
-(defn joiner
+(defn run-join-processor
   [join-ch]
   (go-loop []
-    (let [{:keys [service {:keys [address port]}]} (<!! join-ch)]
+    (let [{service :service, {:keys [address port]} :registrar-info} (<! join-ch)]
       (thread (join-service service address port)))
     (recur)))
 
-(defn join-handler
+(defn run-service-acceptor
   [join-mgr service-ch join-ch]
   (go-loop []
     (let [service     (<! service-ch)
@@ -87,19 +95,47 @@
           joined      (if (service-id service)
                         (service-map (:service-id service))
                         [])
-          not-joined  (difference registrars joind)]
-      (onto-chan join-ch not-joined))
+          not-joined  (difference registrars joined)
+          join-req    (for [reg not-joined]
+                        {:service service, :registrar-info reg})]
+      (onto-chan join-ch join-req))
     (recur)))
 
-(defn start-join-manager
-  [registrar-source]
-  (let [service-ch (chan)
-        join-ch (chan)]
-    (thread
-      (loop []
-        (let [registrars (source/registrars registrar-source)]
+(defn run-registrar-fetcher
+  [join-mgr registrar-source fetch-registrar-interval-ms]
+  (thread
+    (loop []
+      (let [registrars (source/registrars registrar-source)]
+        (reset-registrars! join-mgr registrars))
+      (Thread/sleep fetch-registrar-interval-ms)
+      (recur))))
 
-        (recur)))))
+(defn run-heart-beat-processor
+  [join-mgr service-ch heart-beat-interval-ms]
+  (thread
+    (loop []
+      (let [service-map (deref (:service-map join-mgr))]
+        (doseq [[service registrars] service-map]
+          (doseq [reg registrars]
+            (send-heart-beat service service-ch (:address reg) (:port reg)))))
+      (Thread/sleep heart-beat-interval-ms)
+      (recur))))
+
+(defn start-join-manager
+  [registrar-source fetch-registrar-interval-ms heart-beat-interval-ms]
+  (let [service-ch (chan)
+        join-ch    (chan)
+        join-mgr   (join-manager)]
+    (run-registrar-fetcher registrar-source fetch-registrar-interval-ms)
+    (run-service-acceptor join-mgr service-ch join-ch)
+    (run-join-processor join-ch)
+    (run-heart-beat-processor join-mgr service-ch heart-beat-interval-ms)
+    service-ch))
+
+(defn join
+  [service-ch service]
+  (>! service-ch service))
+
 
 
 

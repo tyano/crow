@@ -1,8 +1,8 @@
 (ns crow.registrar-source
-  (:require [[byte-streams :as bs]
-             [clojure.string :refer [split]]
-             [aleph.http :as http]
-             [manifold.deferred :refer [chain] :as d]]))
+  (:require [byte-streams :as bs]
+            [clojure.string :refer [split]]
+            [aleph.http :as http]
+            [manifold.deferred :refer [chain] :as d]))
 
 
 (defprotocol RegistrarSource
@@ -22,6 +22,6 @@
       (fn [lines]
         (for [line lines]
           (let [[address port-str] (split line #":")]
-            {:address address, :port (Long/valueOf port-str)}))))))
+            {:address address, :port (Long/valueOf ^String port-str)}))))))
 
 (defn url-registrar-source [source-url] (UrlRegistrarSource. source-url))

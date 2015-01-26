@@ -32,7 +32,7 @@
   "0x00を探してそこでバイト列を２分割して、二つのバイト列のベクタを返します。"
   [^bytes data]
   (if-let [idx (find-separator data)]
-    [(Arrays/copyOfRange data 0 idx) (Arrays/copyOfRange data (inc idx) (count data))]
+    [(Arrays/copyOfRange ^bytes data (int 0) (int idx)) (Arrays/copyOfRange ^bytes data (int (inc idx)) (int (count data)))]
     [data nil]))
 
 (defn date->bytes

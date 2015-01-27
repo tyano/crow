@@ -8,13 +8,16 @@
            [msgpack.core Extension]))
 
 (def ^:const separator 0x00)
-(def ^:const type-join-request  1)
-(def ^:const type-registration  2)
-(def ^:const type-heart-beat    3)
-(def ^:const type-lease         4)
-(def ^:const type-lease-expired 5)
+(def ^:const type-join-request    1)
+(def ^:const type-registration    2)
+(def ^:const type-heart-beat      3)
+(def ^:const type-lease           4)
+(def ^:const type-lease-expired   5)
 (def ^:const type-invalid-message 6)
-(def ^:const type-remote-call   7)
+(def ^:const type-remote-call     7)
+(def ^:const type-call-result     8)
+(def ^:const type-protocol-error  9)
+(def ^:const type-call-exception 10)
 
 (defn date->bytes
   "clj-timeのDateTimeオブジェクトを、年（西暦）、月、日、時、分、秒に分解し、
@@ -149,6 +152,58 @@
         entries (unpack data)]
     (apply ->RemoteCall entries)))
 
+(defn remote-call
+  [target-ns fn-name args]
+  (RemoteCall. target-ns fn-name args))
+
+
+(defrecord CallResult [obj])
+
+(defext CallResult type-call-result [ent]
+  (pack (:obj ent)))
+
+(defmethod restore-ext type-call-result
+  [ext]
+  (let [data ^bytes (:data ext)
+        obj (unpack data)]
+    (CallResult. obj)))
+
+(defn call-result
+  [obj]
+  (CallResult. obj))
+
+
+(defrecord CallException [stack-trace-str])
+
+(defext CallException type-call-exception [ent]
+  (pack (:stack-trace-str ent)))
+
+(defmethod restore-ext type-call-exception
+  [ext]
+  (let [data ^bytes (:data ext)
+        stack-trace-str (unpack data)]
+    (CallException. stack-trace-str)))
+
+(defn call-exception
+  [stack-trace-str]
+  (CallException. stack-trace-str))
+
+
+
+(defrecord ProtocolError [error-code message])
+
+(defext ProtocolError type-protocol-error [ent]
+  (pack [(:error-code ent) (:message ent)]))
+
+(defmethod restore-ext type-protocol-error
+  [ext]
+  (let [data ^bytes (:data ext)
+        [error-code message] (unpack data)]
+    (ProtocolError. error-code message)))
+
+(defn protocol-error
+  [error-code message]
+  (ProtocolError. error-code message))
 
 
 

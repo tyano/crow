@@ -4,7 +4,8 @@
             [manifold.deferred :as d]
             [clj-time.core :refer [now after?] :as t]
             [crow.protocol :refer [lease lease-expired registration invalid-message
-                                   unpack-message join-request? heart-beat?] :as p]
+                                   unpack-message join-request? heart-beat?
+                                   protocol-error] :as p]
             [clojure.core.async :refer [go-loop chan <! onto-chan thread]]
             [msgpack.core :refer [pack] :as msgpack])
   (:import [java.util UUID]))

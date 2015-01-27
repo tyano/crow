@@ -24,13 +24,17 @@
   (let [req (join-request (service-id service))
         msg (send-request registrar-address registrar-port req)]
     (when (registration? msg)
-      (swap! (:service-id-atom service)
-        (fn [id] (or id (:service-id msg))))
-      (swap! (:service-map join-mgr)
-        (fn [service-map]
-          (update-in service-map [service]
-            (fn [regs]
-              (conj regs {:address registrar-address, :port registrar-port}))))))))
+      (let [old-sid (service-id service)]
+        (swap! (:service-id-atom service)
+          (fn [id] (or id (:service-id msg))))
+        (swap! (:service-map join-mgr)
+          (fn [service-map]
+            (update-in service-map [service]
+              (fn [regs]
+                (conj regs {:address registrar-address, :port registrar-port})))))
+        (let [id-store (:id-store service)
+              sid      (service-id service)]
+          (write id-store sid))))))
 
 (declare join)
 

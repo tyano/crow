@@ -15,26 +15,6 @@
 (def ^:const type-lease-expired 5)
 (def ^:const type-invalid-message 6)
 
-(defn- find-separator
-  "0x00を探してその位置を返します。先頭は0です。"
-  [^bytes data]
-  (let [stream (byte-stream data)]
-    (try
-      (loop [b   (next-byte stream)
-             idx 0]
-        (if (= b separator)
-          idx
-          (recur (next-byte stream) (inc idx))))
-      (catch EOFException ex
-        nil))))
-
-(defn- split-bytes
-  "0x00を探してそこでバイト列を２分割して、二つのバイト列のベクタを返します。"
-  [^bytes data]
-  (if-let [idx (find-separator data)]
-    [(Arrays/copyOfRange ^bytes data (int 0) (int idx)) (Arrays/copyOfRange ^bytes data (int (inc idx)) (int (count data)))]
-    [data nil]))
-
 (defn date->bytes
   "clj-timeのDateTimeオブジェクトを、年（西暦）、月、日、時、分、秒に分解し、
   それぞれint,byte,byte,byte,byte,byteとしてバイト配列化して結合したバイト列を作ります。"
@@ -65,6 +45,8 @@
   新しいExtensionを追加したら、そのtypeを使って、defmethodも追加しなければなりません。"
   (fn [ext] (:type ext)))
 
+(defmethod restore-ext :default [ext] ext)
+
 
 (defrecord JoinRequest [^String service-id])
 
@@ -86,14 +68,13 @@
 (defrecord Registration [^String service-id expire-at])
 
 (defext Registration type-registration [ent]
-  (ubytes (concat (pack (:service-id ent)) [separator] (pack (date->bytes (:expire-at ent))))))
+  (pack [(:service-id ent) (date->bytes (:expire-at ent))]))
 
 (defmethod restore-ext type-registration
   [ext]
   (let [data ^bytes (:data ext)
-        [id-data ms-data] (split-bytes data)
-        service-id  (unpack id-data)
-        expire-at   (-> (unpack ms-data) (bytes->date))]
+        [service-id date-bytes] (unpack data)
+        expire-at (bytes->date date-bytes)]
     (Registration. service-id expire-at)))
 
 (defn registration [service-id expire-at] (Registration. service-id expire-at))

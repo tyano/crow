@@ -14,6 +14,7 @@
 (def ^:const type-lease         4)
 (def ^:const type-lease-expired 5)
 (def ^:const type-invalid-message 6)
+(def ^:const type-remote-call   7)
 
 (defn date->bytes
   "clj-timeのDateTimeオブジェクトを、年（西暦）、月、日、時、分、秒に分解し、
@@ -137,6 +138,19 @@
 
 
 
+(defrecord RemoteCall [target-ns fn-name args])
+
+(defext RemoteCall type-remote-call [ent]
+  (pack [(:target-ns ent) (:fn-name ent) (:args ent)]))
+
+(defmethod restore-ext type-remote-call
+  [ext]
+  (let [data ^bytes (:data ext)
+        entries (unpack data)]
+    (apply ->RemoteCall entries)))
+
+
+
 
 
 (defn unpack-message
@@ -169,6 +183,11 @@
 (defn invalid-message?
   [msg]
   (instance? InvalidMessage msg))
+
+(defn remote-call?
+  [msg]
+  (instance? RemoteCall msg))
+
 
 
 

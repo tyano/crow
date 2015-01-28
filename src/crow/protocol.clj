@@ -1,7 +1,8 @@
 (ns crow.protocol
   (:require [msgpack.core :refer [defext pack unpack] :as msgpack]
             [msgpack.io :refer [ubytes byte-stream next-int next-byte int->bytes byte->bytes] :as io]
-            [clj-time.core :refer [year month day hour minute sec date-time]])
+            [clj-time.core :refer [year month day hour minute sec date-time]]
+            [clojure.edn :as edn])
   (:import [java.net InetAddress]
            [java.io EOFException]
            [java.util Arrays]
@@ -18,6 +19,9 @@
 (def ^:const type-call-result     8)
 (def ^:const type-protocol-error  9)
 (def ^:const type-call-exception 10)
+(def ^:const type-discovery      11)
+(def ^:const type-service-found  12)
+(def ^:const type-service-not-found  13)
 
 (defn date->bytes
   "clj-timeのDateTimeオブジェクトを、年（西暦）、月、日、時、分、秒に分解し、
@@ -52,20 +56,20 @@
 (defmethod restore-ext :default [ext] ext)
 
 
-(defrecord JoinRequest [^String service-id])
+(defrecord JoinRequest [ip-address service-id service-name attributes])
 
 (defext JoinRequest type-join-request [ent]
-  (pack (:service-id ent)))
+  (pack [(:ip-address ent) (:service-id ent) (:service-name ent) (:attributes ent)]))
 
 (defmethod restore-ext type-join-request
   [ext]
   (let [data ^bytes (:data ext)
-        service-id (unpack data)]
-    (JoinRequest. service-id)))
+        [ip-address service-id service-name attributes] (unpack data)]
+    (JoinRequest. ip-address service-id service-name attributes)))
 
 (defn join-request
-  [^String service-id]
-  (JoinRequest. service-id))
+  [ip-address service-id service-name attributes]
+  (JoinRequest. ip-address service-id service-name attributes))
 
 
 
@@ -206,6 +210,58 @@
   (ProtocolError. error-code message))
 
 
+(defrecord Discovery [service-name attributes])
+
+(defext Discovery type-discovery [ent]
+  (pack [(:service-name ent) (pr-str attributes)]))
+
+(defmethod restore-ext type-discovery
+  [ext]
+  (let [data ^bytes (:data ext)
+        [service-name attr-edn] (unpack data)
+        attributes (edn/read-string attr-edn)]
+    (Discovery. service-name attributes)))
+
+(defn discovery
+  [service-name attributes]
+  (Discovery. service-name attributes))
+
+
+
+(defrecord ServiceFound [ip-address service-name attributes])
+
+(defext ServiceFound type-service-found [ent]
+  (pack [(:ip-address ent) (:service-name ent) (pr-str (:attributes ent))]))
+
+(defmethod restore-ext type-service-found
+  [ext]
+  (let [data ^bytes (:data ext)
+        [ip-address service-name attr-edn] (unpack data)
+        attributes (edn/read-string attr-edn)]
+    (ServiceFound ip-address service-name attributes)))
+
+(defn service-found
+  [ip-address service-name attributes]
+  (ServiceFound. ip-address service-name attributes))
+
+
+
+(defrecord ServiceNotFound [service-name attributes])
+
+(defext ServiceNotFound type-service-not-found [ent]
+  (pack [(:service-name ent) (pr-str (:attributes ent))]))
+
+(defmethod restore-ext type-service-not-found
+  [ext]
+  (let [data ^bytes (:data ext)
+        [service-name attr-edn] (unpack data)
+        attributes (edn/read-string attr-edn)]
+    (ServiceNotFound service-name attributes)))
+
+(defn service-not-found
+  [service-name attributes]
+  (ServiceNotFound. service-name attributes))
+
 
 
 (defn unpack-message
@@ -243,6 +299,15 @@
   [msg]
   (instance? RemoteCall msg))
 
+(defn discovery?
+  [msg]
+  (instance? Discovery msg))
 
+(defn service-found?
+  [msg]
+  (instance? ServiceFound msg))
 
+(defn service-not-found?
+  [msg]
+  (instance? ServiceNotFound msg))
 

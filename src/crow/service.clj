@@ -11,7 +11,8 @@
   (read [this] "read service-id from persistent store."))
 
 (defrecord Service
-  [service-id-atom
+  [ip-address
+   service-id-atom
    expire-at-atom
    registrars
    name
@@ -20,10 +21,10 @@
    public-ns-set])
 
 (defn new-service
-  ([name attributes id-store public-ns-set]
-    (Service. (atom nil) (atom nil) (atom []) name attributes id-store public-ns-set))
-  ([service-id name attributes id-store public-ns-set]
-    (Service. (atom service-id) (atom nil) (atom []) name attributes id-store public-ns-set)))
+  ([ip-address name attributes id-store public-ns-set]
+    (Service. ip-address (atom nil) (atom nil) (atom []) name attributes id-store public-ns-set))
+  ([ip-address service-id name attributes id-store public-ns-set]
+    (Service. ip-address (atom service-id) (atom nil) (atom []) name attributes id-store public-ns-set)))
 
 (defn service-id
   [service]

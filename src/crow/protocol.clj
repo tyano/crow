@@ -2,7 +2,8 @@
   (:require [msgpack.core :refer [defext pack unpack] :as msgpack]
             [msgpack.io :refer [ubytes byte-stream next-int next-byte int->bytes byte->bytes] :as io]
             [clj-time.core :refer [year month day hour minute sec date-time]]
-            [clojure.edn :as edn])
+            [clojure.edn :as edn]
+            [manifold.stream :refer [put! take!] :as s])
   (:import [java.net InetAddress]
            [java.io EOFException]
            [java.util Arrays]
@@ -213,7 +214,7 @@
 (defrecord Discovery [service-name attributes])
 
 (defext Discovery type-discovery [ent]
-  (pack [(:service-name ent) (pr-str attributes)]))
+  (pack [(:service-name ent) (pr-str (:attributes ent))]))
 
 (defmethod restore-ext type-discovery
   [ext]
@@ -227,22 +228,26 @@
   (Discovery. service-name attributes))
 
 
-
-(defrecord ServiceFound [ip-address service-name attributes])
+;;; services is a coll of maps with keys:
+;;; :ip-address :service-name :attributes
+(defrecord ServiceFound [services])
 
 (defext ServiceFound type-service-found [ent]
-  (pack [(:ip-address ent) (:service-name ent) (pr-str (:attributes ent))]))
+  (pack (vec (mapcat #(vector (:ip-address %) (:service-name %) (pr-str (:attributes %))) (:services ent)))))
 
 (defmethod restore-ext type-service-found
   [ext]
   (let [data ^bytes (:data ext)
-        [ip-address service-name attr-edn] (unpack data)
-        attributes (edn/read-string attr-edn)]
-    (ServiceFound ip-address service-name attributes)))
+        service-data-coll (partition 3 (unpack data))
+        services (for [[address service-name attr-edn] service-data-coll]
+                    {:ip-address address
+                     :service-name service-name
+                     :attributes (edn/read-string attr-edn)})]
+    (ServiceFound. services)))
 
 (defn service-found
-  [ip-address service-name attributes]
-  (ServiceFound. ip-address service-name attributes))
+  [services]
+  (ServiceFound. services))
 
 
 
@@ -256,13 +261,15 @@
   (let [data ^bytes (:data ext)
         [service-name attr-edn] (unpack data)
         attributes (edn/read-string attr-edn)]
-    (ServiceNotFound service-name attributes)))
+    (ServiceNotFound. service-name attributes)))
 
 (defn service-not-found
   [service-name attributes]
   (ServiceNotFound. service-name attributes))
 
 
+(defn ping [] 2r01)
+(defn ack  [] 2r10)
 
 (defn unpack-message
   [data]
@@ -270,6 +277,15 @@
     (if (instance? Extension msg)
       (restore-ext msg)
       msg)))
+
+(defn send!
+  [stream obj]
+  (put! stream (pack obj)))
+
+(defn recv!
+  [stream]
+  (unpack-message (take! stream)))
+
 
 (defn join-request?
   [msg]
@@ -310,4 +326,7 @@
 (defn service-not-found?
   [msg]
   (instance? ServiceNotFound msg))
+
+(defn ping? [msg] (= msg 2r01))
+(defn ack? [msg] (= msg 2r10))
 

@@ -1,13 +1,12 @@
 (ns crow.registrar
   (:require [aleph.tcp :refer [start-server] :as tcp]
-            [manifold.stream :refer [put! take!] :as s]
             [manifold.deferred :as d]
             [clj-time.core :refer [now after?] :as t]
             [crow.protocol :refer [lease lease-expired registration invalid-message
-                                   unpack-message join-request? heart-beat? discovery?
-                                   protocol-error] :as p]
+                                   join-request? heart-beat? discovery? ping?
+                                   protocol-error send! recv! ack
+                                   service-found service-not-found] :as p]
             [clojure.core.async :refer [go-loop chan <! onto-chan thread]]
-            [msgpack.core :refer [pack] :as msgpack]
             [crow.service :as sv])
   (:import [java.util UUID]))
 
@@ -90,21 +89,24 @@
 
 (defn accept-discovery
   [registrar service-name attributes]
-  (let [service (first (shuffle (find-matched-services registrar service-name attributes)))
-    ]
+  (if-let [services (not-empty (find-matched-services registrar service-name attributes))]
+    (let [service-coll (map #(into {} %) services)]
+      (service-found service-coll))
+    (service-not-found service-name attributes)))
+
 
 
 (defn registrar-handler
   [registrar stream info]
   (process-registrar registrar)
-  (let [data   (take! stream)
-        msg    (unpack-message data)
+  (let [msg    (recv! stream)
         result (cond
+                  (ping? msg)         (ack)
                   (join-request? msg) (accept-service-registration registrar (:service-id msg))
                   (heart-beat? msg)   (accept-heartbeat registrar (:service-id msg))
                   (discovery? msg)    (accept-discovery registrar (:service-name msg) (:attributes msg))
                   :else               (invalid-message msg))]
-    (put! stream (pack result))))
+    (send! stream result)))
 
 
 (defn start-registrar-service

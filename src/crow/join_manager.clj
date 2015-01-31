@@ -1,21 +1,19 @@
 (ns crow.join-manager
-  (:require [manifold.stream :refer [put! take!] :as s]
-            [aleph.tcp :as tcp]
+  (:require [aleph.tcp :as tcp]
             [crow.protocol :refer [join-request heart-beat
                                    lease? lease-expired? registration?
-                                   unpack-message] :as protocol]
+                                   send! recv!] :as protocol]
             [crow.registrar-source :as source]
             [clojure.core.async :refer [chan thread go-loop <! >! onto-chan] :as async]
             [clojure.set :refer [difference]]
-            [crow.service :refer [service-id]]))
+            [crow.service :refer [service-id write]]))
 
 
 (defn- send-request
   [registrar-address registrar-port req]
   (let [stream @(tcp/client {:host registrar-address, :post registrar-port})]
-    (put! stream req)
-    (let [resp (take! stream)]
-      (unpack-message resp))))
+    (send! stream req)
+    (recv! stream)))
 
 ;;;TODO service-idはクライアント側からも指定できること。
 (defn- join-service!
@@ -40,14 +38,11 @@
 
 (defn- send-heart-beat!
   [service service-ch registrar-address registrar-port]
-  (let [req (heart-beat (service-id service))]
-    (let [stream @(tcp/client {:host registrar-address, :post registrar-port})]
-      (put! stream req)
-      (let [resp (take! stream)
-            msg  (send-request registrar-address registrar-port req)]
-        (cond
-          (lease? msg) (swap! (:expire-at-atom service) (fn [_] (:expire-at msg)))
-          (lease-expired? msg) (join service-ch service))))))
+  (let [req (heart-beat (service-id service))
+        msg (send-request registrar-address registrar-port req)]
+      (cond
+        (lease? msg) (swap! (:expire-at-atom service) (fn [_] (:expire-at msg)))
+        (lease-expired? msg) (join service-ch service))))
 
 
 ;;; registrars - a vector of registrar-info, which is a map with :address and :port of a registrar.

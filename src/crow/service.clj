@@ -1,10 +1,8 @@
 (ns crow.service
   (:refer-clojure :exclude [read])
   (:require [aleph.tcp :as tcp]
-            [manifold.stream :refer [put! take!] :as s]
-            [crow.protocol :refer [unpack-message remote-call? invalid-message protocol-error call-result call-exception] :as p]
-            [crow.marshaller :refer [marshal unmarshal]]
-            [msgpack.core :refer [defext pack unpack] :as msgpack]))
+            [crow.protocol :refer [remote-call? invalid-message protocol-error call-result call-exception send! recv!] :as p]
+            [crow.marshaller :refer [marshal unmarshal]]))
 
 (defprotocol ServiceIdStore
   (write [this service-id] "write service-id into persistent store.")
@@ -68,12 +66,11 @@
 
 (defn- service-handler
   [service stream info]
-  (let [data   (take! stream)
-        msg    (unpack-message data)
+  (let [msg    (recv! stream)
         result (if (remote-call? msg)
                   (handle-remote-call (:public-ns-set service) msg)
                   (invalid-message msg))]
-    (put! stream (pack result))))
+    (send! stream result)))
 
 (defn start-service
   [service port]

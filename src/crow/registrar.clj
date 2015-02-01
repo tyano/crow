@@ -109,8 +109,8 @@
 
 (defn- handle-request
   [registrar data]
-  (pack
-    (let [msg (read-message data)]
+  (let [msg (read-message data)]
+    (pack
       (cond
         (ping? msg)         (do (log/trace "received a ping.") (ack))
         (join-request? msg) (accept-service-registration registrar (:service-id msg))

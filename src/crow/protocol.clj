@@ -151,13 +151,14 @@
 (defrecord RemoteCall [target-ns fn-name args])
 
 (defext RemoteCall type-remote-call [ent]
-  (pack [(:target-ns ent) (:fn-name ent) (:args ent)]))
+  (pack [(:target-ns ent) (:fn-name ent) (pr-str (:args ent))]))
 
 (defmethod restore-ext type-remote-call
   [ext]
   (let [data ^bytes (:data ext)
-        entries (unpack data)]
-    (apply ->RemoteCall entries)))
+        [target-ns fn-name args-edn] (unpack data)
+        args (edn/read-string args-edn)]
+    (RemoteCall. target-ns fn-name args)))
 
 (defn remote-call
   [target-ns fn-name args]

@@ -25,3 +25,9 @@
             {:address address, :port (Long/valueOf ^String port-str)}))))))
 
 (defn url-registrar-source [source-url] (UrlRegistrarSource. source-url))
+
+(defrecord StaticRegistrarSource [address port]
+  RegistrarSource
+  (registrars [_] [{:address address, :port port}]))
+
+(defn static-registrar-source [address port] (StaticRegistrarSource. address port))

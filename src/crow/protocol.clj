@@ -3,7 +3,9 @@
             [msgpack.io :refer [ubytes byte-stream next-int next-byte int->bytes byte->bytes] :as io]
             [clj-time.core :refer [year month day hour minute sec date-time]]
             [clojure.edn :as edn]
-            [manifold.stream :refer [put! take!] :as s])
+            [manifold.stream :refer [put! take!] :as s]
+            [manifold.deferred :refer [let-flow chain]]
+            [byte-streams :refer [to-byte-array]])
   (:import [java.net InetAddress]
            [java.io EOFException]
            [java.util Arrays]
@@ -279,13 +281,22 @@
       msg)))
 
 (defn send!
+  "convert object into bytes and send the bytes into stream.
+  returns a differed object holding true or false."
   [stream obj]
   (put! stream (pack obj)))
 
-(defn recv!
-  [stream]
-  (unpack-message (take! stream)))
+(defn read-message
+  "convert byte-buffer to byte-array and unpack the byte-array to a message format."
+  [data]
+  (-> data to-byte-array unpack-message))
 
+(defn recv!
+  "read from stream and unpack the received bytes.
+  returns a differed object holding an unpacked object."
+  [stream]
+  (chain (take! stream)
+         read-message))
 
 (defn join-request?
   [msg]

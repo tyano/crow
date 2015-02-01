@@ -11,5 +11,9 @@
                  [org.clojure/tools.logging "0.3.1"]
                  [slingshot "0.12.1"]]
   :plugins [[lein-midje "3.1.3"]]
-  :profiles {:dev {:dependencies [[midje "1.6.3"]]}}
-  :aot [crow.registrar-source])
+  :profiles {:dev {:dependencies [[midje "1.6.3"]
+                                  [ch.qos.logback/logback-classic "1.1.2"]]
+                   :resource-paths ["resources-dev"]
+                   :jvm-opts ["-Djava.net.preferIPv4Stack=true"]}}
+  :aot [crow.registrar-source crow.registrar]
+  :main crow.registrar)

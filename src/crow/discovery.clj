@@ -4,6 +4,7 @@
             [crow.service :as service]
             [clojure.set :refer [difference]]
             [aleph.tcp :as tcp]
+            [manifold.deferred :refer [let-flow chain]]
             [clojure.tools.logging :as log]
             [slingshot.slingshot :refer [throw+]]
             [clojure.core.async :refer [thread]]))
@@ -39,18 +40,16 @@
   [registrar-source]
   (let [new-registrars (source/registrars registrar-source)]
     (dosync
-      (io!
-        (alter active-registrars
-          (fn [_]
-            (difference new-registrars @dead-registrars)))))))
+      (alter active-registrars
+        (fn [_]
+          (difference new-registrars @dead-registrars))))))
 
 (defn- abandon-registrar!
   [reg]
   (dosync
-    (io!
-      (let [reg (first (shuffle (alter active-registrars disj reg)))]
-        (alter dead-registrars conj reg)
-        reg))))
+    (let [reg (first (shuffle (alter active-registrars disj reg)))]
+      (alter dead-registrars conj reg)
+      reg)))
 
 (defn- discover-with
   [{:keys [address port] :as registrar} service-name attribute]

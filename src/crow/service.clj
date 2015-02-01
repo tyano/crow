@@ -1,6 +1,7 @@
 (ns crow.service
   (:refer-clojure :exclude [read])
   (:require [aleph.tcp :as tcp]
+            [manifold.deferred :refer [let-flow chain]]
             [crow.protocol :refer [remote-call? invalid-message protocol-error call-result call-exception send! recv!] :as p]
             [crow.marshaller :refer [marshal unmarshal]]))
 
@@ -68,8 +69,8 @@
   [service stream info]
   (let [msg    (recv! stream)
         result (if (remote-call? msg)
-                  (handle-remote-call (:public-ns-set service) msg)
-                  (invalid-message msg))]
+                 (handle-remote-call (:public-ns-set service) msg)
+                 (invalid-message msg))]
     (send! stream result)))
 
 (defn start-service

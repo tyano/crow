@@ -108,19 +108,21 @@
 
 
 (defn- handle-request
-  [registrar data]
-  (let [msg (read-message data)]
-    (pack
-      (cond
-        (ping? msg)         (do (log/trace "received a ping.") (ack))
-        (join-request? msg) (accept-service-registration registrar (:service-id msg))
-        (heart-beat? msg)   (accept-heartbeat registrar (:service-id msg))
-        (discovery? msg)    (accept-discovery registrar (:service-name msg) (:attributes msg))
-        :else               (invalid-message msg)))))
+  [registrar msg]
+  (cond
+    (ping? msg)         (do (log/trace "received a ping.") (ack))
+    (join-request? msg) (accept-service-registration registrar (:service-id msg))
+    (heart-beat? msg)   (accept-heartbeat registrar (:service-id msg))
+    (discovery? msg)    (accept-discovery registrar (:service-name msg) (:attributes msg))
+    :else               (invalid-message msg)))
 
 (defn registrar-handler
   [registrar stream info]
-  (s/connect (s/map (partial handle-request registrar) stream) stream))
+  (let [source (->> stream
+                  (s/map read-message)
+                  (s/map (partial handle-request registrar))
+                  (s/map pack))]
+    (s/connect source stream)))
 
 (defn start-registrar-service
   "レジストラサーバを起動して、サービスからの要求を待ち受けます。"

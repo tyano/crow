@@ -70,16 +70,18 @@
                 (call-exception (format-stack-trace th)))))))))
 
 (defn- handle-request
-  [service data]
-  (let [msg (read-message data)]
-    (pack
-      (cond
-        (remote-call? msg) (handle-remote-call (:public-ns-set service) msg)
-        :else (invalid-message msg)))))
+  [service msg]
+  (cond
+    (remote-call? msg) (handle-remote-call (:public-ns-set service) msg)
+    :else (invalid-message msg)))
 
 (defn- service-handler
   [service stream info]
-  (s/connect (s/map (partial handle-request service) stream) stream))
+  (let [source (->> stream
+                  (s/map read-message)
+                  (s/map (partial handle-request service))
+                  (s/map pack))]
+    (s/connect source stream)))
 
 (defn start-service
   [service port]

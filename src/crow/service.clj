@@ -13,10 +13,14 @@
   (write [this service-id] "write service-id into persistent store.")
   (read [this] "read service-id from persistent store."))
 
+(extend-protocol ServiceIdStore
+  nil
+  (write [this service-id] nil)
+  (read [this] nil))
+
 (defrecord Service
   [ip-address
    service-id-atom
-   expire-at-atom
    registrars
    name
    attributes
@@ -25,18 +29,13 @@
 
 (defn new-service
   ([ip-address name attributes id-store public-ns-set]
-    (Service. ip-address (atom nil) (atom nil) (atom []) name attributes id-store public-ns-set))
+    (Service. ip-address (atom nil) (atom []) name attributes id-store public-ns-set))
   ([ip-address service-id name attributes id-store public-ns-set]
-    (Service. ip-address (atom service-id) (atom nil) (atom []) name attributes id-store public-ns-set)))
+    (Service. ip-address (atom service-id) (atom []) name attributes id-store public-ns-set)))
 
 (defn service-id
   [service]
   (deref (:service-id-atom service)))
-
-(defn expire-at
-  [service]
-  (deref (:expire-at-atom service)))
-
 
 
 (defn- format-stack-trace
@@ -94,6 +93,6 @@
     (when (< (count args) 2)
       (throw (IllegalArgumentException. "service-name and port must be supplied.")))
     (let [sample-service (new-service "localhost" service-name {} nil #{"clojure.core"})
-          port (Long/valueOf port-str)]
+          port (Long/valueOf ^String port-str)]
       (log/info (str "#### SERVICE (name: " service-name ", port: " port ") starts."))
-      (start-service sample-service (Long/valueOf port)))))
+      (start-service sample-service port))))

@@ -2,7 +2,7 @@
   (:require [aleph.tcp :refer [start-server] :as tcp]
             [manifold.deferred :refer [let-flow chain]]
             [manifold.stream :refer [connect] :as s]
-            [clj-time.core :refer [now after?] :as t]
+            [clj-time.core :refer [now after? plus millis] :as t]
             [crow.protocol :refer [lease lease-expired registration invalid-message
                                    join-request? heart-beat? discovery? ping?
                                    protocol-error send! recv! ack
@@ -36,25 +36,32 @@
   [registrar ip-address sid service-name attributes]
   (log/trace "service registration:" service-name (pr-str attributes))
   (let [service-id (or sid (new-service-id))
-        services   (swap! (:services registrar) #(assoc % service-id (ServiceInfo. ip-address service-id service-name attributes (now))))
-        expire-at  (services service-id)]
+        expire-at  (-> (now) (plus (millis (:renewal-ms registrar))))
+        services   (swap! (:services registrar)
+                      #(assoc % service-id (ServiceInfo.
+                                              ip-address
+                                              service-id
+                                              service-name
+                                              attributes
+                                              expire-at)))]
     (trace-pr "registered:"
       (registration service-id expire-at))))
 
 
 (defn accept-heartbeat
-  [registrar service-id]
+  [registrar service-id renewal-ms]
   (log/trace "accept-heartbeat:" service-id)
-  (let [services  (swap! (:services registrar)
+  (let [expire-at (-> (now) (plus (millis (:renewal-ms registrar))))
+        services  (swap! (:services registrar)
                     (fn [service-map]
                       (if (service-map service-id)
                         (update-in service-map [service-id]
                           (fn [old-info]
-                            (update-in old-info [:expire-at] (now))))
+                            (assoc old-info :expire-at expire-at)))
                         service-map)))
-        expire-at (services service-id)]
+        current   (services service-id)]
     (trace-pr "heartbeat response:"
-      (if expire-at
+      (if current
         (lease expire-at)
         (lease-expired service-id)))))
 
@@ -64,11 +71,12 @@
 
 
 (defn- check-expiration
-  [ch]
+  [registrar ch]
   (go-loop []
     (let [[service-id service-info] (<! ch)]
       (when (after? (now) (:expire-at service-info))
-        (service-expired service-id)))
+        (trace-pr "service expired:" service-info)
+        (service-expired registrar service-id)))
     (recur)))
 
 (defn- watch-services
@@ -84,7 +92,7 @@
   [registrar]
   (let [ch (chan)]
     (watch-services registrar ch)
-    (check-expiration ch)))
+    (check-expiration registrar ch)))
 
 (defn- service-matches?
   [service service-name attributes]
@@ -108,19 +116,20 @@
 
 
 (defn- handle-request
-  [registrar msg]
+  [registrar renewal-ms msg]
   (cond
     (ping? msg)         (do (log/trace "received a ping.") (ack))
-    (join-request? msg) (accept-service-registration registrar (:service-id msg))
-    (heart-beat? msg)   (accept-heartbeat registrar (:service-id msg))
+    (join-request? msg) (let [{:keys [ip-address service-id service-name attributes]} msg]
+                          (accept-service-registration registrar ip-address service-id service-name attributes))
+    (heart-beat? msg)   (accept-heartbeat registrar (:service-id msg) renewal-ms)
     (discovery? msg)    (accept-discovery registrar (:service-name msg) (:attributes msg))
     :else               (invalid-message msg)))
 
 (defn registrar-handler
-  [registrar stream info]
+  [registrar renewal-ms stream info]
   (let [source (->> stream
                   (s/map read-message)
-                  (s/map (partial handle-request registrar))
+                  (s/map (partial handle-request registrar renewal-ms))
                   (s/map pack))]
     (s/connect source stream)))
 
@@ -128,7 +137,7 @@
   "レジストラサーバを起動して、サービスからの要求を待ち受けます。"
   [port & {:keys [renewal-ms watch-interval] :or {renewal-ms default-renewal-ms, watch-interval default-watch-interval}}]
   (let [registrar (new-registrar renewal-ms watch-interval)
-        handler   (partial registrar-handler registrar)]
+        handler   (partial registrar-handler registrar renewal-ms)]
     (log/info (str "#### REGISTRAR SERVICE (port: " port ") starts."))
     (process-registrar registrar)
     (tcp/start-server handler {:port port})))

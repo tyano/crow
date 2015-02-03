@@ -1,118 +1,178 @@
 (ns crow.join-manager
   (:require [aleph.tcp :as tcp]
+            [manifold.deferred :refer [let-flow chain] :as d]
             [crow.protocol :refer [join-request heart-beat
                                    lease? lease-expired? registration?
                                    send! recv!] :as protocol]
             [crow.registrar-source :as source]
             [clojure.core.async :refer [chan thread go-loop <! >! onto-chan] :as async]
             [clojure.set :refer [difference]]
-            [crow.service :refer [service-id write]]))
+            [crow.service :refer [service-id write]]
+            [slingshot.slingshot :refer [throw+]]
+            [clojure.tools.logging :as log]
+            [clj-time.core :refer [now plus after? millis] :as t]
+            [crow.logging :refer [trace-pr error-pr]]))
 
+(def should-stop (atom false))
 
-(defn- send-request
-  [registrar-address registrar-port req]
-  (let [stream @(tcp/client {:host registrar-address, :post registrar-port})]
-    (send! stream req)
-    (recv! stream)))
+(defn send-request
+  [address port req]
+  (let-flow [stream (tcp/client {:host address, :port port})
+             sent?  (send! stream req)]
+    (when sent? (recv! stream))))
+
+(defn- join!
+  [join-mgr service registrar-address registrar-port msg]
+  (let [old-sid (service-id service)
+        expire-at (:expire-at msg)]
+    (swap! (:service-id-atom service) #(or % (:service-id msg)))
+    (swap! (:service-map join-mgr)    #(assoc % (service-id service) service))
+    (swap! (:service-registrars-map join-mgr)
+      (fn [service-registrars-map]
+        (update-in service-registrars-map [(service-id service)]
+          (fn [regs]
+            (conj regs {:address registrar-address, :port registrar-port, :expire-at expire-at})))))
+    (let [sid (service-id service)]
+      (let [id-store (:id-store service)]
+        (write id-store sid))
+      (log/trace (str "joined! service: " (pr-str service) ". service-id: " (service-id service) "."))
+      sid)))
 
 ;;;TODO service-idはクライアント側からも指定できること。
 (defn- join-service!
   "send a join request to a registrar and get a new service-id"
   [join-mgr service registrar-address registrar-port]
-  (let [req (join-request (:ip-address service) (service-id service) (:name service) (:attributes service))
-        msg (send-request registrar-address registrar-port req)]
-    (when (registration? msg)
-      (let [old-sid (service-id service)]
-        (swap! (:service-id-atom service)
-          (fn [id] (or id (:service-id msg))))
-        (swap! (:service-map join-mgr)
-          (fn [service-map]
-            (update-in service-map [service]
-              (fn [regs]
-                (conj regs {:address registrar-address, :port registrar-port})))))
-        (let [id-store (:id-store service)
-              sid      (service-id service)]
-          (write id-store sid))))))
+  (log/trace "Joinning" (pr-str service) "to" (pr-str {:address registrar-address, :port registrar-port}))
+  (let [req (join-request (:ip-address service) (service-id service) (:name service) (:attributes service))]
+    (-> (send-request registrar-address registrar-port req)
+        (chain
+          (fn [msg]
+            (cond
+              (registration? msg) (join! join-mgr service registrar-address registrar-port msg)
+              :else (do
+                      (trace-pr "illegal message:" msg)
+                      (throw+ {:type ::illegal-response
+                             :message msg
+                             :info {:service service
+                                    :registrar-address registrar-address
+                                    :registrar-port registrar-port}})))))
+        (d/catch Exception #(error-pr "Error in deffered." %)))))
 
 (declare join)
 
 (defn- send-heart-beat!
-  [service service-ch registrar-address registrar-port]
-  (let [req (heart-beat (service-id service))
-        msg (send-request registrar-address registrar-port req)]
-      (cond
-        (lease? msg) (swap! (:expire-at-atom service) (fn [_] (:expire-at msg)))
-        (lease-expired? msg) (join service-ch service))))
+  [join-mgr service service-ch {:keys [address port expire-at]}]
+  (let [req (heart-beat (service-id service))]
+    (-> (send-request address port req)
+        (chain
+          (fn [msg]
+            (cond
+              (lease? msg)  (do
+                              (log/trace "Lease Renewal: " (service-id service))
+                              (swap! (:service-registrars-map join-mgr)
+                                (fn [service-registrars-map]
+                                  (update-in service-registrars-map [(service-id service)]
+                                    (fn [regs]
+                                      (-> (remove #(and (= (:address %) address) (= (:port %) port)) regs)
+                                          (conj {:address address, :port port, :expire-at (:expire-at msg)})))))))
+              (lease-expired? msg) (join service-ch service)
+              :else (do
+                      (trace-pr "illegal message:" msg)
+                      (throw+ {:type ::illegal-response
+                               :message msg
+                               :info {:service service
+                                      :registrar-address address
+                                      :registrar-port port}})))))
+        (d/catch Exception #(error-pr "Error in deffered." %)))))
 
 
-;;; registrars - a vector of registrar-info, which is a map with :address and :port of a registrar.
-;;; service-map - a map of service-id (key) and a set of registrar-infos of already joined regsitrar (value)
-(defrecord JoinManager [registrars service-map])
+;;; registrars - a vector of registrar, which is a map with :address and :port of a registrar.
+;;; service-registrars-map - a map of service-id (key) and a set of registrars of already joined regsitrar (value)
+(defrecord JoinManager [registrars service-registrars-map service-map])
 
-(defn- join-manager [] (JoinManager. (atom #{}) (atom {})))
+(defn- join-manager [] (JoinManager. (atom #{}) (atom {}) (atom {})))
 
 (defn- joined?
-  "true if 'service-id' is already join to the registrar described by 'registrar-info'."
-  [join-mgr service-id registrar-info]
+  "true if 'service-id' is already join to the registrar."
+  [join-mgr service-id registrar]
   (boolean
-    (let [service-map (deref (:service-map join-mgr))]
-      (when-let [registrars (service-map service-id)]
-        (registrars registrar-info)))))
+    (let [service-registrars-map (deref (:service-registrars-map join-mgr))]
+      (when-let [registrars (service-registrars-map service-id)]
+        (registrars registrar)))))
 
 (defn- reset-registrars!
   [join-mgr registrars]
-  (swap! (deref (:registrars join-mgr)) (fn [_] registrars)))
+  (swap! (:registrars join-mgr) (fn [_] registrars)))
 
 (defn- run-join-processor
-  [join-ch]
+  [join-mgr join-ch]
   (go-loop []
-    (let [{service :service, {:keys [address port]} :registrar-info} (<! join-ch)]
-      (thread (join-service! service address port)))
-    (recur)))
+    (if @should-stop
+      (log/trace "join-processor stopped.")
+      (do
+        (let [{service :service, {:keys [address port]} :registrar, :as join-info} (<! join-ch)]
+          (when (seq join-info)
+            (join-service! join-mgr service address port)))
+        (recur)))))
 
 (defn- run-service-acceptor
   [join-mgr service-ch join-ch]
   (go-loop []
-    (let [service     (<! service-ch)
-          service-map (deref (:service-map join-mgr))
-          registrars  (deref (:registrars join-mgr))
-          joined      (if (service-id service)
-                        (service-map (:service-id service))
-                        [])
-          not-joined  (difference registrars joined)
-          join-req    (for [reg not-joined]
-                        {:service service, :registrar-info reg})]
-      (onto-chan join-ch join-req))
-    (recur)))
+    (if @should-stop
+      (log/trace "service-acceptor stopped.")
+      (do
+        (let [service     (<! service-ch)
+              service-registrars-map (deref (:service-registrars-map join-mgr))
+              registrars  (deref (:registrars join-mgr))
+              joined      (if (service-id service)
+                            (map #(dissoc % :expire-at) (service-registrars-map service-id))
+                            [])
+              not-joined  (difference registrars joined)
+              join-req    (for [reg not-joined]
+                            {:service service, :registrar reg})]
+          (trace-pr "join-req: " join-req)
+          (onto-chan join-ch join-req))
+        (recur)))))
 
 (defn- run-registrar-fetcher
   [join-mgr registrar-source fetch-registrar-interval-ms]
   (thread
     (loop []
-      (let [registrars (source/registrars registrar-source)]
-        (reset-registrars! join-mgr registrars))
-      (Thread/sleep fetch-registrar-interval-ms)
-      (recur))))
+      (if @should-stop
+        (log/trace "registrar-fetcher stopped.")
+        (do
+          (log/trace "Resetting registrars from registrar-source.")
+          (let [registrars (source/registrars registrar-source)]
+            (reset-registrars! join-mgr registrars))
+          (Thread/sleep fetch-registrar-interval-ms)
+          (recur))))))
 
 (defn- run-heart-beat-processor
   [join-mgr service-ch heart-beat-interval-ms]
   (thread
     (loop []
-      (let [service-map (deref (:service-map join-mgr))]
-        (doseq [[service registrars] service-map]
-          (doseq [reg registrars]
-            (send-heart-beat! service service-ch (:address reg) (:port reg)))))
-      (Thread/sleep heart-beat-interval-ms)
-      (recur))))
+      (if @should-stop
+        (log/trace "heart-beat-processor stopped.")
+        (do
+          (let [service-registrars-map (deref (:service-registrars-map join-mgr))
+                service-map (deref (:service-map join-mgr))]
+            (doseq [[service-id registrars]     service-registrars-map
+                    {:keys [expire-at] :as reg} registrars]
+              (when (after? (plus (now) (millis heart-beat-interval-ms)) expire-at)
+                (when-let [service (service-map service-id)]
+                  (log/trace "send heart-beat from" (pr-str service) "to" (pr-str reg))
+                  (send-heart-beat! join-mgr service service-ch reg)))))
+          (Thread/sleep 500)
+          (recur))))))
 
 (defn start-join-manager
   [registrar-source fetch-registrar-interval-ms heart-beat-interval-ms]
   (let [service-ch (chan)
         join-ch    (chan)
         join-mgr   (join-manager)]
-    (run-registrar-fetcher registrar-source fetch-registrar-interval-ms)
+    (run-registrar-fetcher join-mgr registrar-source fetch-registrar-interval-ms)
     (run-service-acceptor join-mgr service-ch join-ch)
-    (run-join-processor join-ch)
+    (run-join-processor join-mgr join-ch)
     (run-heart-beat-processor join-mgr service-ch heart-beat-interval-ms)
     service-ch))
 

@@ -1,7 +1,8 @@
 (ns crow.protocol
+  (:refer-clojure :exclude [second])
   (:require [msgpack.core :refer [defext pack unpack] :as msgpack]
             [msgpack.io :refer [ubytes byte-stream next-int next-byte int->bytes byte->bytes] :as io]
-            [clj-time.core :refer [year month day hour minute sec date-time]]
+            [clj-time.core :refer [year month day hour minute second date-time]]
             [clojure.edn :as edn]
             [manifold.stream :refer [put! take!] :as s]
             [manifold.deferred :refer [let-flow chain]]
@@ -35,8 +36,8 @@
         day-bytes    (byte->bytes (day t))
         hour-bytes   (byte->bytes (hour t))
         minute-bytes (byte->bytes (minute t))
-        second-bytes (byte->bytes (sec t))]
-    (ubytes [year-bytes month-bytes day-bytes hour-bytes minute-bytes second-bytes])))
+        second-bytes (byte->bytes (second t))]
+    (ubytes (concat year-bytes month-bytes day-bytes hour-bytes minute-bytes second-bytes))))
 
 (defn bytes->date
   "date->bytesによってバイト配列化されたclj-time DateTimeオブジェクトを復元します。"

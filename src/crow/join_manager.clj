@@ -5,21 +5,16 @@
                                    lease? lease-expired? registration?
                                    send! recv!] :as protocol]
             [crow.registrar-source :as source]
+            [crow.request :as request]
             [clojure.core.async :refer [chan thread go-loop <! >! onto-chan] :as async]
             [clojure.set :refer [difference]]
             [crow.service :refer [service-id write]]
             [slingshot.slingshot :refer [throw+]]
             [clojure.tools.logging :as log]
             [clj-time.core :refer [now plus after? millis] :as t]
-            [crow.logging :refer [trace-pr error-pr]]))
+            [crow.logging :refer [trace-pr]]))
 
 (def should-stop (atom false))
-
-(defn send-request
-  [address port req]
-  (let-flow [stream (tcp/client {:host address, :port port})
-             sent?  (send! stream req)]
-    (when sent? (recv! stream))))
 
 (defn- join!
   [join-mgr service registrar-address registrar-port msg]
@@ -44,7 +39,7 @@
   [join-mgr service registrar-address registrar-port]
   (log/trace "Joinning" (pr-str service) "to" (pr-str {:address registrar-address, :port registrar-port}))
   (let [req (join-request (:ip-address service) (service-id service) (:name service) (:attributes service))]
-    (-> (send-request registrar-address registrar-port req)
+    (-> (request/send registrar-address registrar-port req)
         (chain
           (fn [msg]
             (cond
@@ -52,18 +47,18 @@
               :else (do
                       (trace-pr "illegal message:" msg)
                       (throw+ {:type ::illegal-response
-                             :message msg
-                             :info {:service service
-                                    :registrar-address registrar-address
-                                    :registrar-port registrar-port}})))))
-        (d/catch Exception #(error-pr "Error in deffered." %)))))
+                               :message msg
+                               :info {:service service
+                                      :registrar-address registrar-address
+                                      :registrar-port registrar-port}})))))
+        (d/catch Throwable #(log/error "Error in deffered." %)))))
 
 (declare join)
 
 (defn- send-heart-beat!
   [join-mgr service service-ch {:keys [address port expire-at]}]
   (let [req (heart-beat (service-id service))]
-    (-> (send-request address port req)
+    (-> (request/send address port req)
         (chain
           (fn [msg]
             (cond
@@ -83,7 +78,7 @@
                                :info {:service service
                                       :registrar-address address
                                       :registrar-port port}})))))
-        (d/catch Exception #(error-pr "Error in deffered." %)))))
+        (d/catch Throwable #(log/error "Error in deffered." %)))))
 
 
 ;;; registrars - a vector of registrar, which is a map with :address and :port of a registrar.

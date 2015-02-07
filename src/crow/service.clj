@@ -7,7 +7,10 @@
                                    send! recv! read-message] :as p]
             [crow.marshaller :refer [marshal unmarshal]]
             [clojure.tools.logging :as log]
-            [crow.logging :refer [trace-pr]]))
+            [crow.logging :refer [trace-pr]]
+            [clojure.string :refer [blank?]]
+            [clojure.java.io :refer [writer reader]])
+  (:import [java.io FileNotFoundException]))
 
 (defprotocol ServiceIdStore
   (write [this service-id] "write service-id into persistent store.")
@@ -18,8 +21,25 @@
   (write [this service-id] nil)
   (read [this] nil))
 
+
+(defrecord FileIdStore [file-path]
+  ServiceIdStore
+  (write [this service-id]
+    (when (not (blank? service-id))
+      (with-open [w (writer file-path :append false)]
+        (.write w service-id)
+        (.newLine w))))
+  (read [this]
+    (try
+      (with-open [r (reader file-path)]
+        (.readLine r))
+      (catch FileNotFoundException ex
+        nil))))
+
+
 (defrecord Service
-  [ip-address
+  [address
+   port
    service-id-atom
    registrars
    name
@@ -28,10 +48,10 @@
    public-ns-set])
 
 (defn new-service
-  ([ip-address name attributes id-store public-ns-set]
-    (Service. ip-address (atom nil) (atom []) name attributes id-store public-ns-set))
-  ([ip-address service-id name attributes id-store public-ns-set]
-    (Service. ip-address (atom service-id) (atom []) name attributes id-store public-ns-set)))
+  ([address port name attributes id-store public-ns-set]
+    (Service. address port (atom nil) (atom []) name attributes id-store public-ns-set))
+  ([address port service-id name attributes id-store public-ns-set]
+    (Service. address port (atom service-id) (atom []) name attributes id-store public-ns-set)))
 
 (defn service-id
   [service]
@@ -83,8 +103,10 @@
     (s/connect source stream)))
 
 (defn start-service
-  [service port]
-  (tcp/start-server (partial service-handler service) {:port port}))
+  [{:keys [address port name attributes id-store public-namespaces], :as config, :or {address "localhost" attributes {}}}]
+  {:pre [port (not (clojure.string/blank? name)) id-store (seq public-namespaces)]}
+  (let [service (new-service address port name attributes id-store (set public-namespaces))]
+    (tcp/start-server (partial service-handler service) {:port port})))
 
 (defn -main
   [& args]
@@ -92,7 +114,12 @@
   (let [[service-name port-str] args]
     (when (< (count args) 2)
       (throw (IllegalArgumentException. "service-name and port must be supplied.")))
-    (let [sample-service (new-service "localhost" service-name {} nil #{"clojure.core"})
-          port (Long/valueOf ^String port-str)]
+    (let [port (Long/valueOf ^String port-str)
+          config {:address  "localhost"
+                  :port     port
+                  :name     service-name
+                  :id-store (FileIdStore. "/tmp/example.id")
+                  :public-namespaces #{"clojure.core"}}]
       (log/info (str "#### SERVICE (name: " service-name ", port: " port ") starts."))
-      (start-service sample-service port))))
+      (start-service config))))
+

@@ -10,7 +10,7 @@
             [crow.logging :refer [trace-pr]]
             [clojure.string :refer [blank?]]
             [clojure.java.io :refer [writer reader]])
-  (:import [java.io FileNotFoundException]))
+  (:import [java.io FileNotFoundException Writer Reader]))
 
 (defprotocol ServiceIdStore
   (write [this service-id] "write service-id into persistent store.")
@@ -26,12 +26,12 @@
   ServiceIdStore
   (write [this service-id]
     (when (not (blank? service-id))
-      (with-open [w (writer file-path :append false)]
+      (with-open [w ^Writer (writer file-path :append false)]
         (.write w service-id)
         (.newLine w))))
   (read [this]
     (try
-      (with-open [r (reader file-path)]
+      (with-open [r ^Reader (reader file-path)]
         (.readLine r))
       (catch FileNotFoundException ex
         nil))))

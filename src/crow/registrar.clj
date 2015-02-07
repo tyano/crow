@@ -19,14 +19,12 @@
 (def ^:const default-renewal-ms 10000)
 (def ^:const default-watch-interval 2000)
 
-(defrecord Registrar [renewal-ms watch-interval services])
+(defrecord Registrar [name renewal-ms watch-interval services])
 (defrecord ServiceInfo [ip-address service-id name attributes expire-at])
 
 (defn new-registrar
-  ([]
-    (Registrar. default-renewal-ms default-watch-interval (atom {})))
-  ([renewal-ms watch-interval]
-    (Registrar. renewal-ms watch-interval (atom {}))))
+  ([name renewal-ms watch-interval]
+    (Registrar. name renewal-ms watch-interval (atom {}))))
 
 (defn- new-service-id
   []
@@ -133,20 +131,25 @@
                   (s/map pack))]
     (s/connect source stream)))
 
+
 (defn start-registrar-service
-  "レジストラサーバを起動して、サービスからの要求を待ち受けます。"
-  [port & {:keys [renewal-ms watch-interval] :or {renewal-ms default-renewal-ms, watch-interval default-watch-interval}}]
-  (let [registrar (new-registrar renewal-ms watch-interval)
+  "Starting a registrar and wait requests.
+  An argument is a map of configurations of keys:
+
+  :port a waiting port number.
+  :renewal-ms  milliseconds for make each registered services expired. Services must send a 'lease' request before the expiration.
+  :watch-internal  milliseconds for checking each service is expired or not."
+  [{:keys [port name renewal-ms watch-interval] :or {port 4000, renewal-ms default-renewal-ms, watch-interval default-watch-interval}}]
+  (let [registrar (new-registrar name renewal-ms watch-interval)
         handler   (partial registrar-handler registrar renewal-ms)]
-    (log/info (str "#### REGISTRAR SERVICE (port: " port ") starts."))
+    (log/info (str "#### REGISTRAR SERVICE (name: " (pr-str name) " port: " port ") starts."))
     (process-registrar registrar)
     (tcp/start-server handler {:port port})))
 
 
 (defn -main
-  [& args]
-  (let [port-str (first args)
-        opts     (partition 2 (rest args))]
+  [name port-str & args]
+  (let [opts (partition 2 args)]
     (when-not port-str
       (throw (IllegalArgumentException. "port must be supplied as a first arg.")))
     (let [optmap (into {} (for [[k v] opts]
@@ -154,8 +157,6 @@
                               "-r" [:renewal-ms (Long/valueOf v)]
                               "-w" [:watch-interval (Long/valueOf v)]
                               (throw (IllegalArgumentException. (str "Unknown option: " k))))))]
-      (apply start-registrar-service
-                (Long/valueOf port-str)
-                (concat (into [] optmap))))))
-
+      (start-registrar-service
+                (merge {:port (Long/valueOf port-str), :name name} optmap)))))
 

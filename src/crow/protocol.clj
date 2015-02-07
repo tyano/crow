@@ -6,7 +6,8 @@
             [clojure.edn :as edn]
             [manifold.stream :refer [put! take!] :as s]
             [manifold.deferred :refer [let-flow chain]]
-            [byte-streams :refer [to-byte-array]])
+            [byte-streams :refer [to-byte-array]]
+            [crow.marshaller :refer [marshal unmarshal]])
   (:import [java.net InetAddress]
            [java.io EOFException]
            [java.util Arrays]
@@ -152,13 +153,13 @@
 (defrecord RemoteCall [target-ns fn-name args])
 
 (defext RemoteCall type-remote-call [ent]
-  (pack [(:target-ns ent) (:fn-name ent) (pr-str (:args ent))]))
+  (pack [(:target-ns ent) (:fn-name ent) (marshal (:args ent))]))
 
 (defmethod restore-ext type-remote-call
   [ext]
   (let [data ^bytes (:data ext)
-        [target-ns fn-name args-edn] (unpack data)
-        args (edn/read-string args-edn)]
+        [target-ns fn-name args-marshalled] (unpack data)
+        args (unmarshal args-marshalled)]
     (RemoteCall. target-ns fn-name args)))
 
 (defn remote-call
@@ -169,12 +170,13 @@
 (defrecord CallResult [obj])
 
 (defext CallResult type-call-result [ent]
-  (pack (:obj ent)))
+  (pack (marshal (:obj ent))))
 
 (defmethod restore-ext type-call-result
   [ext]
   (let [data ^bytes (:data ext)
-        obj (unpack data)]
+        obj-marshalled (unpack data)
+        obj (unmarshal obj-marshalled)]
     (CallResult. obj)))
 
 (defn call-result

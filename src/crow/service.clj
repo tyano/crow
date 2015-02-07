@@ -77,8 +77,12 @@
   (trace-pr "remote-call response:"
     (let [target-fn (find-var (symbol target-ns fn-name))]
       (cond
-        (not (public-ns-set target-ns)) (protocol-error error-namespace-is-not-public (format "namespace '%s' is not public for remote call" target-ns))
-        (not target-fn) (protocol-error error-target-not-found (format "the fn %s/%s is not found." target-ns fn-name))
+        (not (public-ns-set target-ns))
+          (protocol-error error-namespace-is-not-public
+                          (format "namespace '%s' is not public for remote call" target-ns))
+        (not target-fn)
+          (protocol-error error-target-not-found
+                          (format "the fn %s/%s is not found." target-ns fn-name))
         :else
           (let [unmarshalled (map unmarshal args)]
             (try
@@ -109,17 +113,15 @@
     (tcp/start-server (partial service-handler service) {:port port})))
 
 (defn -main
-  [& args]
-
-  (let [[service-name port-str] args]
-    (when (< (count args) 2)
-      (throw (IllegalArgumentException. "service-name and port must be supplied.")))
-    (let [port (Long/valueOf ^String port-str)
-          config {:address  "localhost"
-                  :port     port
-                  :name     service-name
-                  :id-store (FileIdStore. "/tmp/example.id")
-                  :public-namespaces #{"clojure.core"}}]
-      (log/info (str "#### SERVICE (name: " service-name ", port: " port ") starts."))
-      (start-service config))))
+  [& [service-name port-str :as args]]
+  (when (< (count args) 2)
+    (throw (IllegalArgumentException. "service-name and port must be supplied.")))
+  (let [port (Long/valueOf ^String port-str)
+        config {:address  "localhost"
+                :port     port
+                :name     service-name
+                :id-store (FileIdStore. "/tmp/example.id")
+                :public-namespaces #{"clojure.core"}}]
+    (log/info (str "#### SERVICE (name: " service-name ", port: " port ") starts."))
+    (start-service config)))
 

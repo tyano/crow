@@ -4,14 +4,7 @@
             [msgpack.io :refer [ubytes byte-stream next-int next-byte int->bytes byte->bytes] :as io]
             [clj-time.core :refer [year month day hour minute second date-time]]
             [clojure.edn :as edn]
-            [manifold.stream :refer [put! take!] :as s]
-            [manifold.deferred :refer [let-flow chain]]
-            [byte-streams :refer [to-byte-array]]
-            [crow.marshaller :refer [marshal unmarshal]])
-  (:import [java.net InetAddress]
-           [java.io EOFException]
-           [java.util Arrays]
-           [msgpack.core Extension]))
+            [crow.marshaller :refer [marshal unmarshal]]))
 
 (def ^:const separator 0x00)
 (def ^:const type-join-request    1)
@@ -277,30 +270,6 @@
 (defn ping [] 2r01)
 (defn ack  [] 2r10)
 
-(defn unpack-message
-  [data]
-  (let [msg (unpack data)]
-    (if (instance? Extension msg)
-      (restore-ext msg)
-      msg)))
-
-(defn send!
-  "convert object into bytes and send the bytes into stream.
-  returns a differed object holding true or false."
-  [stream obj]
-  (put! stream (pack obj)))
-
-(defn read-message
-  "convert byte-buffer to byte-array and unpack the byte-array to a message format."
-  [data]
-  (-> data to-byte-array unpack-message))
-
-(defn recv!
-  "read from stream and unpack the received bytes.
-  returns a differed object holding an unpacked object."
-  [stream]
-  (chain (take! stream)
-         read-message))
 
 (defn join-request?
   [msg]

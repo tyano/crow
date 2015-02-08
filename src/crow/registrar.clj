@@ -5,9 +5,9 @@
             [clj-time.core :refer [now after? plus millis] :as t]
             [crow.protocol :refer [lease lease-expired registration invalid-message
                                    join-request? heart-beat? discovery? ping?
-                                   protocol-error send! recv! ack
-                                   service-found service-not-found
-                                   read-message] :as p]
+                                   protocol-error ack
+                                   service-found service-not-found] :as p]
+            [crow.request :refer [read-message]]
             [msgpack.core :refer [pack] :as msgpack]
             [clojure.core.async :refer [go-loop chan <! onto-chan thread]]
             [crow.service :as sv]
@@ -101,7 +101,7 @@
 
 (defn- find-matched-services
   [registrar service-name attributes]
-  (filter #(service-matches? %) (deref (:services registrar))))
+  (filter #(service-matches? % service-name attributes) (deref (:services registrar))))
 
 (defn accept-discovery
   [registrar service-name attributes]

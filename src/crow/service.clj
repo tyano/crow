@@ -1,40 +1,15 @@
 (ns crow.service
-  (:refer-clojure :exclude [read])
   (:require [aleph.tcp :as tcp]
             [manifold.stream :refer [connect] :as s]
             [msgpack.core :refer [pack] :as msgpack]
-            [crow.protocol :refer [remote-call? invalid-message protocol-error call-result call-exception
-                                   send! recv! read-message] :as p]
+            [crow.protocol :refer [remote-call? invalid-message protocol-error call-result call-exception] :as p]
+            [crow.request :refer [read-message]]
             [crow.marshaller :refer [marshal unmarshal]]
+            [crow.join-manager :refer [start-join-manager join]]
             [clojure.tools.logging :as log]
             [crow.logging :refer [trace-pr]]
-            [clojure.string :refer [blank?]]
-            [clojure.java.io :refer [writer reader]])
-  (:import [java.io FileNotFoundException Writer Reader]))
-
-(defprotocol ServiceIdStore
-  (write [this service-id] "write service-id into persistent store.")
-  (read [this] "read service-id from persistent store."))
-
-(extend-protocol ServiceIdStore
-  nil
-  (write [this service-id] nil)
-  (read [this] nil))
-
-
-(defrecord FileIdStore [file-path]
-  ServiceIdStore
-  (write [this service-id]
-    (when (not (blank? service-id))
-      (with-open [w ^Writer (writer file-path :append false)]
-        (.write w service-id)
-        (.newLine w))))
-  (read [this]
-    (try
-      (with-open [r ^Reader (reader file-path)]
-        (.readLine r))
-      (catch FileNotFoundException ex
-        nil))))
+            [crow.registrar-source :refer [static-registrar-source]]
+            [crow.id-store :refer [->FileIdStore]]))
 
 
 (defrecord Service
@@ -107,10 +82,14 @@
     (s/connect source stream)))
 
 (defn start-service
-  [{:keys [address port name attributes id-store public-namespaces], :as config, :or {address "localhost" attributes {}}}]
-  {:pre [port (not (clojure.string/blank? name)) id-store (seq public-namespaces)]}
+  [{:keys [address port name attributes id-store public-namespaces registrar-source fetch-registrar-interval-ms heart-beat-interval-ms], :as config, :or {address "localhost" attributes {}}}]
+  {:pre [port (not (clojure.string/blank? name)) id-store (seq public-namespaces) registrar-source fetch-registrar-interval-ms heart-beat-interval-ms]}
   (let [service (new-service address port name attributes id-store (set public-namespaces))]
-    (tcp/start-server (partial service-handler service) {:port port})))
+    (tcp/start-server (partial service-handler service) {:port port})
+    (let [join-mgr (start-join-manager registrar-source
+                                       fetch-registrar-interval-ms
+                                       heart-beat-interval-ms)]
+      (join join-mgr service))))
 
 (defn -main
   [& [service-name port-str :as args]]
@@ -120,8 +99,11 @@
         config {:address  "localhost"
                 :port     port
                 :name     service-name
-                :id-store (FileIdStore. "/tmp/example.id")
-                :public-namespaces #{"clojure.core"}}]
+                :id-store (->FileIdStore "/tmp/example.id")
+                :public-namespaces #{"clojure.core"}
+                :registrar-source (static-registrar-source "localhost" 4000)
+                :fetch-registrar-interval-ms 30000
+                :heart-beat-interval-ms      4000}]
     (log/info (str "#### SERVICE (name: " service-name ", port: " port ") starts."))
     (start-service config)))
 

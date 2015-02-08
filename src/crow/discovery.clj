@@ -1,5 +1,7 @@
 (ns crow.discovery
-  (:require [crow.protocol :refer [discovery service-found? service-not-found? send! recv! ping ack?]]
+  (:refer-clojure :exclude [send])
+  (:require [crow.protocol :refer [discovery service-found? service-not-found? ping ack?]]
+            [crow.request :refer [send]]
             [crow.registrar-source :as source]
             [crow.service :as service]
             [crow.request :as request]
@@ -25,14 +27,12 @@
     (while true
       (let [current-dead-registrars (vec (dead-registrars finder))]
         (doseq [{:keys [address port] :as registrar} current-dead-registrars]
-          (let [stream @(tcp/client {:host address, :port port})]
-            (send! stream (ping))
-            (let [msg (recv! stream)]
-              (if (ack? msg)
-                (dosync
-                  (alter (:dead-registrars finder) disj registrar)
-                  (alter (:active-registrars finder) conj registrar))
-                (log/error "Invalid response:" msg)))))
+          (let [msg @(send address port (ping))]
+            (if (ack? msg)
+              (dosync
+                (alter (:dead-registrars finder) disj registrar)
+                (alter (:active-registrars finder) conj registrar))
+              (log/error (str "Invalid response:" msg)))))
         (Thread/sleep *dead-registrar-check-interval-ms*)))))
 
 
@@ -72,6 +72,8 @@
                      (chain
                        (fn [msg]
                          (cond
+                           (false? msg)
+                              (throw+ {:type ::can-not-connect, :address address, :port port})
                            (service-found? msg)
                               msg
                            (service-not-found? msg)
@@ -80,7 +82,7 @@
                               (throw+ {:type ::illegal-reponse, :response msg}))))
                      (d/catch Throwable
                         (fn [th]
-                           (log/error "An error occured when sending a discovery request." th)
+                           (log/error th "An error occured when sending a discovery request.")
                            (abandon-registrar! registrar)
                            th)))]
     (if (instance? Throwable result)

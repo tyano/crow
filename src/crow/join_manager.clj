@@ -2,19 +2,22 @@
   (:require [aleph.tcp :as tcp]
             [manifold.deferred :refer [let-flow chain] :as d]
             [crow.protocol :refer [join-request heart-beat
-                                   lease? lease-expired? registration?
-                                   send! recv!] :as protocol]
+                                   lease? lease-expired? registration?] :as protocol]
             [crow.registrar-source :as source]
             [crow.request :as request]
-            [clojure.core.async :refer [chan thread go-loop <! >! onto-chan] :as async]
+            [crow.id-store :refer [write]]
+            [clojure.core.async :refer [chan thread go-loop <! >!! onto-chan] :as async]
             [clojure.set :refer [difference]]
-            [crow.service :refer [service-id write]]
             [slingshot.slingshot :refer [throw+]]
             [clojure.tools.logging :as log]
             [clj-time.core :refer [now plus after? millis] :as t]
             [crow.logging :refer [trace-pr]]))
 
 (def should-stop (atom false))
+
+(defn- service-id
+  [service]
+  (deref (:service-id-atom service)))
 
 (defn- join!
   [join-mgr service registrar-address registrar-port msg]
@@ -43,6 +46,7 @@
         (chain
           (fn [msg]
             (cond
+              (false? msg) (throw+ {:type ::connection-error})
               (registration? msg) (join! join-mgr service registrar-address registrar-port msg)
               :else (do
                       (trace-pr "illegal message:" msg)
@@ -51,34 +55,39 @@
                                :info {:service service
                                       :registrar-address registrar-address
                                       :registrar-port registrar-port}})))))
-        (d/catch Throwable #(log/error "Error in deffered." %)))))
+        (d/catch Throwable #(log/error % "Error in deffered.")))))
 
 (declare join)
 
 (defn- send-heart-beat!
   [join-mgr service service-ch {:keys [address port expire-at]}]
-  (let [req (heart-beat (service-id service))]
-    (-> (request/send address port req)
-        (chain
-          (fn [msg]
-            (cond
-              (lease? msg)  (do
-                              (log/trace "Lease Renewal: " (service-id service))
-                              (swap! (:service-registrars-map join-mgr)
-                                (fn [service-registrars-map]
-                                  (update-in service-registrars-map [(service-id service)]
-                                    (fn [regs]
-                                      (-> (remove #(and (= (:address %) address) (= (:port %) port)) regs)
-                                          (conj {:address address, :port port, :expire-at (:expire-at msg)})))))))
-              (lease-expired? msg) (join service-ch service)
-              :else (do
-                      (trace-pr "illegal message:" msg)
-                      (throw+ {:type ::illegal-response
-                               :message msg
-                               :info {:service service
-                                      :registrar-address address
-                                      :registrar-port port}})))))
-        (d/catch Throwable #(log/error "Error in deffered." %)))))
+  (let [req (heart-beat (service-id service))
+        msg @(request/send address port req)]
+    (trace-pr "msg: " msg)
+    (cond
+      (false? msg)  false
+      (lease? msg)  (do
+                      (log/trace "Lease Renewal: " (service-id service))
+                      (swap! (:service-registrars-map join-mgr)
+                        (fn [service-registrars-map]
+                          (update-in service-registrars-map [(service-id service)]
+                            (fn [regs]
+                              (-> (remove #(and (= (:address %) address) (= (:port %) port)) regs)
+                                  (conj {:address address, :port port, :expire-at (:expire-at msg)}))))))
+                      true)
+      (lease-expired? msg)
+                    (do
+                      (join service-ch service)
+                      true)
+      :else (do
+              (trace-pr "illegal message:" msg)
+              (throw+ {:type ::illegal-response
+                       :message msg
+                       :info {:service service
+                              :registrar-address address
+                              :registrar-port port}})))))
+
+;        (d/catch Throwable #(log/error "Error in deffered." %)))))
 
 
 ;;; registrars - a vector of registrar, which is a map with :address and :port of a registrar.
@@ -136,29 +145,35 @@
       (if @should-stop
         (log/trace "registrar-fetcher stopped.")
         (do
-          (log/trace "Resetting registrars from registrar-source.")
-          (let [registrars (source/registrars registrar-source)]
-            (reset-registrars! join-mgr registrars))
-          (Thread/sleep fetch-registrar-interval-ms)
+          (try
+            (log/trace "Resetting registrars from registrar-source.")
+            (let [registrars (source/registrars registrar-source)]
+              (reset-registrars! join-mgr registrars))
+            (Thread/sleep fetch-registrar-interval-ms)
+            (catch Throwable th
+              (log/error th "registrar-fetcher error.")))
           (recur))))))
 
 (defn- run-heart-beat-processor
   [join-mgr service-ch heart-beat-interval-ms]
   (thread
     (loop []
-      (if @should-stop
-        (log/trace "heart-beat-processor stopped.")
-        (do
-          (let [service-registrars-map (deref (:service-registrars-map join-mgr))
-                service-map (deref (:service-map join-mgr))]
-            (doseq [[service-id registrars]     service-registrars-map
-                    {:keys [expire-at] :as reg} registrars]
-              (when (after? (plus (now) (millis heart-beat-interval-ms)) expire-at)
-                (when-let [service (service-map service-id)]
-                  (log/trace "send heart-beat from" (pr-str service) "to" (pr-str reg))
-                  (send-heart-beat! join-mgr service service-ch reg)))))
-          (Thread/sleep 500)
-          (recur))))))
+        (if @should-stop
+          (log/trace "heart-beat-processor stopped.")
+          (do
+            (try
+              (let [service-registrars-map (deref (:service-registrars-map join-mgr))
+                    service-map (deref (:service-map join-mgr))]
+                (doseq [[service-id registrars]     service-registrars-map
+                        {:keys [expire-at] :as reg} registrars]
+                  (when (after? (plus (now) (millis heart-beat-interval-ms)) expire-at)
+                    (when-let [service (service-map service-id)]
+                      (log/trace "send heart-beat from" (pr-str service) "to" (pr-str reg))
+                      (send-heart-beat! join-mgr service service-ch reg)))))
+              (Thread/sleep 500)
+              (catch Throwable th
+                (log/error th "heart-beat error.")))
+            (recur))))))
 
 (defn start-join-manager
   [registrar-source fetch-registrar-interval-ms heart-beat-interval-ms]
@@ -173,5 +188,5 @@
 
 (defn join
   [service-ch service]
-  (>! service-ch service))
+  (>!! service-ch service))
 

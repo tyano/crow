@@ -82,13 +82,15 @@
     (s/connect source stream)))
 
 (defn start-service
-  [{:keys [address port name attributes id-store public-namespaces registrar-source fetch-registrar-interval-ms heart-beat-interval-ms], :as config, :or {address "localhost" attributes {}}}]
+  [{:keys [address port name attributes id-store public-namespaces registrar-source fetch-registrar-interval-ms heart-beat-interval-ms dead-registrar-check-interval rejoin-interval-ms], :as config, :or {address "localhost" attributes {}}}]
   {:pre [port (not (clojure.string/blank? name)) id-store (seq public-namespaces) registrar-source fetch-registrar-interval-ms heart-beat-interval-ms]}
   (let [service (new-service address port name attributes id-store (set public-namespaces))]
     (tcp/start-server (partial service-handler service) {:port port})
     (let [join-mgr (start-join-manager registrar-source
                                        fetch-registrar-interval-ms
-                                       heart-beat-interval-ms)]
+                                       dead-registrar-check-interval
+                                       heart-beat-interval-ms
+                                       rejoin-interval-ms)]
       (join join-mgr service))))
 
 (defn -main
@@ -103,7 +105,9 @@
                 :public-namespaces #{"clojure.core"}
                 :registrar-source (static-registrar-source "localhost" 4000)
                 :fetch-registrar-interval-ms 30000
-                :heart-beat-interval-ms      4000}]
+                :heart-beat-interval-ms      4000
+                :dead-registrar-check-interval 10000
+                :rejoin-interval-ms 10000}]
     (log/info (str "#### SERVICE (name: " service-name ", port: " port ") starts."))
     (start-service config)))
 

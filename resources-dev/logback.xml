@@ -8,8 +8,10 @@
   </appender>
 
   <logger name="crow" level="TRACE" />
+  <logger name="aleph" level="INFO" />
+  <logger name="io.netty" level="INFO" />
 
-  <root level="debug">
+  <root level="INFO">
     <appender-ref ref="STDOUT" />
   </root>
 </configuration>

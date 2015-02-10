@@ -54,20 +54,20 @@
 (defmethod restore-ext :default [ext] ext)
 
 
-(defrecord JoinRequest [ip-address service-id service-name attributes])
+(defrecord JoinRequest [address port service-id service-name attributes])
 
 (defext JoinRequest type-join-request [ent]
-  (pack [(:ip-address ent) (:service-id ent) (:service-name ent) (:attributes ent)]))
+  (pack [(:address ent) (:port ent) (:service-id ent) (:service-name ent) (:attributes ent)]))
 
 (defmethod restore-ext type-join-request
   [ext]
   (let [data ^bytes (:data ext)
-        [ip-address service-id service-name attributes] (unpack data)]
-    (JoinRequest. ip-address service-id service-name attributes)))
+        [address port service-id service-name attributes] (unpack data)]
+    (JoinRequest. address port service-id service-name attributes)))
 
 (defn join-request
-  [ip-address service-id service-name attributes]
-  (JoinRequest. ip-address service-id service-name attributes))
+  [address port service-id service-name attributes]
+  (JoinRequest. address port service-id service-name attributes))
 
 
 

@@ -20,7 +20,7 @@
 (def ^:const default-watch-interval 2000)
 
 (defrecord Registrar [name renewal-ms watch-interval services])
-(defrecord ServiceInfo [ip-address service-id name attributes expire-at])
+(defrecord ServiceInfo [address port service-id name attributes expire-at])
 
 (defn new-registrar
   ([name renewal-ms watch-interval]
@@ -31,13 +31,14 @@
   (str (UUID/randomUUID)))
 
 (defn accept-service-registration
-  [registrar ip-address sid service-name attributes]
-  (log/trace "service registration:" service-name (pr-str attributes))
+  [registrar address port sid service-name attributes]
+  (log/trace "service registration:" address port sid service-name (pr-str attributes))
   (let [service-id (or sid (new-service-id))
         expire-at  (-> (now) (plus (millis (:renewal-ms registrar))))
         services   (swap! (:services registrar)
                       #(assoc % service-id (ServiceInfo.
-                                              ip-address
+                                              address
+                                              port
                                               service-id
                                               service-name
                                               attributes
@@ -117,8 +118,8 @@
   [registrar renewal-ms msg]
   (cond
     (ping? msg)         (do (log/trace "received a ping.") (ack))
-    (join-request? msg) (let [{:keys [ip-address service-id service-name attributes]} msg]
-                          (accept-service-registration registrar ip-address service-id service-name attributes))
+    (join-request? msg) (let [{:keys [address port service-id service-name attributes]} msg]
+                          (accept-service-registration registrar address port service-id service-name attributes))
     (heart-beat? msg)   (accept-heartbeat registrar (:service-id msg) renewal-ms)
     (discovery? msg)    (accept-discovery registrar (:service-name msg) (:attributes msg))
     :else               (invalid-message msg)))

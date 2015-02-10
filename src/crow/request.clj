@@ -1,7 +1,7 @@
 (ns crow.request
   (:refer-clojure :exclude [send])
   (:require [aleph.tcp :as tcp]
-            [manifold.stream :refer [try-put! try-take!] :as s]
+            [manifold.stream :refer [try-put! try-take! close!] :as s]
             [manifold.deferred :refer [let-flow chain] :as d]
             [msgpack.core :refer [pack unpack] :as msgpack]
             [clojure.tools.logging :as log]
@@ -46,28 +46,31 @@
   [address port req]
   (chain (tcp/client {:host address, :port port})
     (fn [stream]
-      (chain (send! stream req)
-        (fn [sent]
-          (trace-pr "sent: " sent)
-          (case sent
-            false
-              (do
-                (log/error (str "Couldn't send a message: " (pr-str req)))
-                false)
-            :crow.protocol/timeout
-              (do
-                (log/error (str "Timeout: Couldn't send a message: " (pr-str req)))
-                false)
-            (chain (recv! stream)
-              (fn [msg]
-                (trace-pr "recv-message: " msg)
-                (case msg
-                  :crow.protocol/timeout
-                    (do
-                      (log/error (str "Timeout: Couldn't receive a response for a req: " (pr-str req)))
-                      false)
-                  :crow.protocol/drained
-                    (do
-                      (log/error (str "Drained: Peer closed: req: " (pr-str req)))
-                      false)
-                  msg)))))))))
+      (-> (chain (send! stream req)
+            (fn [sent]
+              (case sent
+                false
+                  (do
+                    (log/error (str "Couldn't send a message: " (pr-str req)))
+                    false)
+                :crow.protocol/timeout
+                  (do
+                    (log/error (str "Timeout: Couldn't send a message: " (pr-str req)))
+                    false)
+                (recv! stream)))
+            (fn [msg]
+              (case msg
+                false false
+                :crow.protocol/timeout
+                  (do
+                    (log/error (str "Timeout: Couldn't receive a response for a req: " (pr-str req)))
+                    false)
+                :crow.protocol/drained
+                  (do
+                    (log/error (str "Drained: Peer closed: req: " (pr-str req)))
+                    false)
+                msg)))
+          (d/finally
+            (fn []
+              (close! stream)))))))
+

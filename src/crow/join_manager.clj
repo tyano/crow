@@ -182,13 +182,10 @@
         (try
           (when-let [service (<! service-ch)]
             (let [[joined-registrars registrars] (dosync [@(:registrars service) @(:registrars join-mgr)])
-                  joined      (trace-pr "joined: "
-                                (map #(dissoc % :expire-at) joined-registrars))
-                  not-joined  (trace-pr "not-joined: " (difference registrars joined))
-                  join-req    (for [reg not-joined]
-                                {:service service, :registrar reg})]
+                  joined      (map #(dissoc % :expire-at) joined-registrars)
+                  not-joined  (difference registrars joined)
+                  join-req    (for [reg not-joined] {:service service, :registrar reg})]
                 (when (seq join-req)
-                  (trace-pr "join-req: " join-req)
                   (onto-chan join-ch join-req false))))
           (catch Throwable e
             (log/error e "service-acceptor error.")))
@@ -267,9 +264,9 @@
                           (registrar-revived! join-mgr registrar))
                       :else nil)))))
             (catch Throwable th
-              ;; dead-registrar-checker usually get error when checking registrars,
+              ;; dead-registrar-checker usually get an error when checking registrars,
               ;; because the purpose of this thread is accessing to 'dead' registrars for checking
-              ;; it alive.
+              ;; it is alive or not. If a registrar is 'dead' yet, the access will cause an error.
               ;; So if we print the error with ERROR level, verbose error logs will be printed.
               ;; It should be printed only debugging.
               (log/debug th "dead-registrar-checker error.")))

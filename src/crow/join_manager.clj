@@ -7,7 +7,7 @@
             [crow.request :as request]
             [crow.id-store :refer [write]]
             [clojure.core.async :refer [chan thread go-loop <! >!! onto-chan] :as async]
-            [clojure.set :refer [difference]]
+            [clojure.set :refer [difference select] :as st]
             [slingshot.slingshot :refer [throw+]]
             [clojure.tools.logging :as log]
             [clj-time.core :refer [now plus after? millis] :as t]
@@ -15,15 +15,15 @@
 
 (def should-stop (atom false))
 
-(defrecord JoinManager [registrars dead-registrars service-registrars-map expired-registrars-map not-joined-services service-map])
-(defn- join-manager [] (JoinManager. (ref #{}) (ref #{}) (ref {}) (ref {}) (atom #{}) (ref {})))
+(defrecord JoinManager [registrars dead-registrars managed-services])
+(defn- join-manager [] (JoinManager. (ref #{}) (ref #{}) (ref #{})))
 
 
 
 
 (defn- service-id
   [service]
-  (deref (:service-id-atom service)))
+  (deref (:service-id-ref service)))
 
 (defn- same-service?
   [s1 s2]
@@ -38,60 +38,32 @@
 (defn- accept-lease!
   [join-mgr service {:keys [address port] :as registrar} expire-at]
   (dosync
-    (alter (:service-registrars-map join-mgr)
-      (fn [service-registrars-map]
-        (update-in service-registrars-map [(service-id service)]
-          (fn [regs]
-            (-> (remove #(same-registrar? % registrar) regs)
-                (conj {:address address, :port port, :expire-at expire-at}))))))))
+    (alter (:registrars service)
+      #(-> (select (complement (partial same-registrar? registrar)) %)
+           (conj {:address address, :port port, :expire-at expire-at})))))
 
 (defn- joined-to-registrar!
   [join-mgr service {:keys [address port] :as registrar} sid expire-at]
-  (reset! (:service-id-atom service) sid) ;storing a new service id from message. this action must be done at first.
   (dosync
-    (alter (:service-registrars-map join-mgr)
-      (fn [service-registrars-map]
-        (update-in service-registrars-map [(service-id service)]
-          (fn [regs]
-            (-> (remove #(same-registrar? % registrar) regs)
-                (set)
-                (conj {:address address, :port port, :expire-at expire-at}))))))
-    (alter (:service-map join-mgr)  #(assoc % (service-id service) service))
-    (alter (:expired-registrars-map join-mgr)
-      (fn [expired-registrars-map]
-        (update-in expired-registrars-map [(service-id service)] disj {:address address, :port port}))))
-  (swap! (:not-joined-services join-mgr) (fn [s] (remove #(same-service? % service) s))))
+    (ref-set (:service-id-ref service) sid) ;storing a new service id from message. this action must be done at first.
+    (alter (:registrars service)
+      #(-> (select (complement (partial same-registrar? registrar)) %)
+           (conj {:address address, :port port, :expire-at expire-at})))
+    (alter (:managed-services join-mgr) conj service)))
 
 (defn- service-expired!
   [join-mgr service {:keys [address port]}]
   (let [registrar {:address address, :port port}]
     (dosync
-      (alter (:service-registrars-map join-mgr)
-        (fn [service-registrars-map]
-          (update-in service-registrars-map [(service-id service)]
-            (fn [regs]
-              (remove #(same-registrar? % registrar) regs)))))
-      (alter (:expired-registrars-map join-mgr)
-        (fn [expired-registrars-map]
-          (update-in expired-registrars-map [(service-id service)]
-            #(conj (or % #{}) registrar)))))))
+      (alter (:registrars service) #(select (complement (partial same-registrar? registrar)) %)))))
 
 (defn- registrar-died!
   [join-mgr service {:keys [address port]}]
   (let [registrar {:address address, :port port}]
-    (swap! (:not-joined-services join-mgr) conj service)
     (dosync
       (alter (:registrars join-mgr) disj registrar)
       (alter (:dead-registrars join-mgr) conj registrar)
-      ;; service-id might not assigned yet.
-      (when (service-id service)
-        (alter (:service-registrars-map join-mgr)
-          (fn [service-registrars-map]
-            (update-in service-registrars-map [(service-id service)]
-              (fn [regs] (remove #(same-registrar? % registrar) regs)))))
-        (alter (:expired-registrars-map join-mgr)
-          (fn [expired-registrars-map]
-            (update-in expired-registrars-map [(service-id service)] #(conj (or % #{}) registrar))))))))
+      (alter (:registrars service) #(select (complement (partial same-registrar? registrar)) %)))))
 
 (defn- reset-registrars!
   [join-mgr registrars]
@@ -118,8 +90,6 @@
       (log/debug (str "joined! service: " (pr-str service) ". service-id: " sid "."))
       sid)))
 
-
-;;;TODO service-idはクライアント側からも指定できること。
 (defn- join-service!
   "send a join request to a registrar and get a new service-id"
   [join-mgr service {:keys [address port] :as registrar}]
@@ -140,7 +110,9 @@
                                       :registrar-port port}})))))
         (d/catch
           (fn [e]
-            (registrar-died! join-mgr service registrar)
+            (dosync
+              (alter (:managed-services join-mgr) conj service)
+              (registrar-died! join-mgr service registrar))
             (throw e))))))
 
 (declare join)
@@ -179,12 +151,11 @@
 
 
 (defn- joined?
-  "true if 'service-id' is already join to the registrar."
-  [join-mgr sid registrar]
+  "true if a service is already join to the registrar."
+  [service registrar]
   (boolean
-    (let [service-registrars-map @(:service-registrars-map join-mgr)]
-      (when-let [registrars (service-registrars-map sid)]
-        (registrars registrar)))))
+    (when-let [registrars (not-empty @(:registrars service))]
+      (registrars registrar))))
 
 (defn- run-join-processor
   [join-mgr join-ch]
@@ -197,8 +168,7 @@
             (when (seq join-info)
               (-> (join-service! join-mgr service registrar)
                   (d/catch
-                    (fn [e]
-                      (log/error e "An exception occured when joining."))))))
+                    #(log/error % "An exception occured when joining.")))))
           (catch Throwable e
             (log/error e "join-processor error.")))
         (recur)))))
@@ -211,11 +181,9 @@
       (do
         (try
           (when-let [service (<! service-ch)]
-            (let [[service-registrars-map registrars] (dosync [@(:service-registrars-map join-mgr) @(:registrars join-mgr)])
+            (let [[joined-registrars registrars] (dosync [@(:registrars service) @(:registrars join-mgr)])
                   joined      (trace-pr "joined: "
-                                (if-let [sid (service-id service)]
-                                  (map #(dissoc % :expire-at) (service-registrars-map sid))
-                                  []))
+                                (map #(dissoc % :expire-at) joined-registrars))
                   not-joined  (trace-pr "not-joined: " (difference registrars joined))
                   join-req    (for [reg not-joined]
                                 {:service service, :registrar reg})]
@@ -250,24 +218,22 @@
         (log/info "heart-beat-processor stopped.")
         (do
           (try
-            (let [[service-registrars-map service-map] (dosync [@(:service-registrars-map join-mgr) @(:service-map join-mgr)])]
-              (doseq [[sid registrars] service-registrars-map
-                      {:keys [address port expire-at] :as reg} registrars]
-                (when (after? (plus (now) (millis heart-beat-interval-ms)) expire-at)
-                  (when-let [service (service-map sid)]
-                    (log/debug "send heart-beat from" (pr-str service) "to" (pr-str reg))
-                    (-> (send-heart-beat! join-mgr service reg)
-                        (d/catch
-                          (fn [e]
-                            (log/error e "Could not send heart-beat to " (pr-str reg)))))))))
+            (doseq [[service reg]
+                      (dosync
+                        (for [service @(:managed-services join-mgr)
+                              {:keys [expire-at] :as reg} @(:registrars service)
+                              :when (after? (plus (now) (millis heart-beat-interval-ms)) expire-at)]
+                          [service reg]))]
+              (log/debug "send heart-beat from" (pr-str service) "to" (pr-str reg))
+              (-> (send-heart-beat! join-mgr service reg)
+                  (d/catch
+                    #(log/error % "Could not send heart-beat to " (pr-str reg)))))
             (Thread/sleep 500)
 
             (catch Throwable th
               (log/error th "heart-beat-processor error.")))
           (recur))))))
 
-;;;TODO Does the expired-registrar-map should have registrars?
-;;;Isn't enought only service-id?
 (defn- run-join-to-expired-registrar
   [join-mgr service-ch rejoin-interval-ms]
   (thread
@@ -276,16 +242,7 @@
         (log/info "join-to-expired-registrar stopped.")
         (do
           (try
-            (when (seq (trace-pr "registrars: " @(:registrars join-mgr)))
-              (doseq [[sid expired-registrars] @(:expired-registrars-map join-mgr)]
-                (when (seq expired-registrars)
-                  (let [service-map @(:service-map join-mgr)
-                        service (service-map sid)]
-                    (log/trace "expired service: " sid)
-                    (join service-ch service))))
-              (doseq [service @(:not-joined-services join-mgr)]
-                (log/trace "not-joined-service: " (service-id service))
-                (join service-ch service)))
+            (onto-chan service-ch @(:managed-services join-mgr) false)
             (Thread/sleep rejoin-interval-ms)
             (catch Throwable e
               (log/error e "join-to-expired-registrar error.")))

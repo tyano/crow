@@ -15,7 +15,7 @@
 (defrecord Service
   [address
    port
-   service-id-atom
+   service-id-ref
    registrars
    name
    attributes
@@ -24,13 +24,13 @@
 
 (defn new-service
   ([address port name attributes id-store public-ns-set]
-    (Service. address port (atom nil) (atom []) name attributes id-store public-ns-set))
+    (Service. address port (ref nil) (ref #{}) name attributes id-store public-ns-set))
   ([address port service-id name attributes id-store public-ns-set]
-    (Service. address port (atom service-id) (atom []) name attributes id-store public-ns-set)))
+    (Service. address port (ref service-id) (ref #{}) name attributes id-store public-ns-set)))
 
 (defn service-id
   [service]
-  (deref (:service-id-atom service)))
+  (deref (:service-id-ref service)))
 
 
 (defn- format-stack-trace

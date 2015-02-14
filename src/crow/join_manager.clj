@@ -33,13 +33,21 @@
   [r1 r2]
   (and (= (:address r1) (:address r2)) (= (:port r1) (:port r2))))
 
+(defn- remove-registrar-fn
+  [registrar]
+  (fn [registrar-set]
+    (select (complement (partial same-registrar? registrar)) registrar-set)))
+
+(defn- remove-registrar
+  [registrar registrar-set]
+  ((remove-registrar-fn registrar) registrar-set))
 
 
 (defn- accept-lease!
   [join-mgr service {:keys [address port] :as registrar} expire-at]
   (dosync
     (alter (:registrars service)
-      #(-> (select (complement (partial same-registrar? registrar)) %)
+      #(-> (remove-registrar registrar %)
            (conj {:address address, :port port, :expire-at expire-at})))))
 
 (defn- joined-to-registrar!
@@ -47,7 +55,7 @@
   (dosync
     (ref-set (:service-id-ref service) sid) ;storing a new service id from message. this action must be done at first.
     (alter (:registrars service)
-      #(-> (select (complement (partial same-registrar? registrar)) %)
+      #(-> (remove-registrar registrar %)
            (conj {:address address, :port port, :expire-at expire-at})))
     (alter (:managed-services join-mgr) conj service)))
 
@@ -55,7 +63,7 @@
   [join-mgr service {:keys [address port]}]
   (let [registrar {:address address, :port port}]
     (dosync
-      (alter (:registrars service) #(select (complement (partial same-registrar? registrar)) %)))))
+      (alter (:registrars service) (remove-registrar-fn registrar)))))
 
 (defn- registrar-died!
   [join-mgr service {:keys [address port]}]
@@ -63,7 +71,7 @@
     (dosync
       (alter (:registrars join-mgr) disj registrar)
       (alter (:dead-registrars join-mgr) conj registrar)
-      (alter (:registrars service) #(select (complement (partial same-registrar? registrar)) %)))))
+      (alter (:registrars service) (remove-registrar-fn registrar)))))
 
 (defn- reset-registrars!
   [join-mgr registrars]

@@ -216,7 +216,7 @@
           (recur))))))
 
 (defn- run-heart-beat-processor
-  [join-mgr heart-beat-interval-ms]
+  [join-mgr heart-beat-buffer-ms]
   (thread
     (loop []
       (if @should-stop
@@ -227,7 +227,7 @@
                       (dosync
                         (for [service @(:managed-services join-mgr)
                               {:keys [expire-at] :as reg} @(:registrars service)
-                              :when (after? (plus (now) (millis heart-beat-interval-ms)) expire-at)]
+                              :when (after? (plus (now) (millis heart-beat-buffer-ms)) expire-at)]
                           [service reg]))]
               (log/debug "send heart-beat from" (pr-str service) "to" (pr-str reg))
               (-> (send-heart-beat! join-mgr service reg)
@@ -282,14 +282,14 @@
           (recur))))))
 
 (defn start-join-manager
-  [registrar-source fetch-registrar-interval-ms dead-registrar-check-interval heart-beat-interval-ms rejoin-interval-ms]
+  [registrar-source fetch-registrar-interval-ms dead-registrar-check-interval heart-beat-buffer-ms rejoin-interval-ms]
   (let [service-ch (chan)
         join-ch    (chan)
         join-mgr   (join-manager)]
     (run-registrar-fetcher join-mgr registrar-source fetch-registrar-interval-ms)
     (run-service-acceptor join-mgr service-ch join-ch)
     (run-join-processor join-mgr join-ch)
-    (run-heart-beat-processor join-mgr heart-beat-interval-ms)
+    (run-heart-beat-processor join-mgr heart-beat-buffer-ms)
     (run-join-to-expired-registrar join-mgr service-ch rejoin-interval-ms)
     (run-dead-registrar-checker join-mgr dead-registrar-check-interval)
     service-ch))

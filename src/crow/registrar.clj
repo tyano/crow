@@ -13,7 +13,8 @@
             [crow.service :as sv]
             [clojure.tools.logging :as log]
             [crow.logging :refer [trace-pr]]
-            [byte-streams :refer [to-byte-array]])
+            [byte-streams :refer [to-byte-array]]
+            [clojure.set :refer [superset?]])
   (:import [java.util UUID]))
 
 (def ^:const default-renewal-ms 10000)
@@ -97,12 +98,12 @@
   [service service-name attributes]
   (if-let [attrs (not-empty attributes)]
     (and (= service-name (:name service))
-         ((set (:attributes service)) attrs))
+         (superset? (set (:attributes service)) (set attrs)))
     (= service-name (:name service))))
 
 (defn- find-matched-services
   [registrar service-name attributes]
-  (filter #(service-matches? % service-name attributes) (deref (:services registrar))))
+  (filter #(service-matches? % service-name attributes) (vals (deref (:services registrar)))))
 
 (defn accept-discovery
   [registrar service-name attributes]
@@ -111,7 +112,12 @@
     (if-let [services (not-empty (find-matched-services registrar service-name attributes))]
       (let [service-coll (map #(into {} %) services)]
         (service-found service-coll))
-      (service-not-found service-name attributes))))
+      (do
+        (log/debug "service not found.")
+        (log/trace "current registared services:")
+        (doseq [svc @(:services registrar)]
+          (trace-pr "" svc))
+        (service-not-found service-name attributes)))))
 
 
 (defn- handle-request

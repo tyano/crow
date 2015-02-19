@@ -228,18 +228,19 @@
 
 
 ;;; services is a coll of maps with keys:
-;;; :ip-address :service-name :attributes
+;;; :address :port :service-name :attributes
 (defrecord ServiceFound [services])
 
 (defext ServiceFound type-service-found [ent]
-  (pack (vec (mapcat #(vector (:ip-address %) (:service-name %) (pr-str (:attributes %))) (:services ent)))))
+  (pack (vec (mapcat #(vector (:address %) (:port %) (:service-name %) (pr-str (:attributes %))) (:services ent)))))
 
 (defmethod restore-ext type-service-found
   [ext]
   (let [data ^bytes (:data ext)
-        service-data-coll (partition 3 (unpack data))
-        services (for [[address service-name attr-edn] service-data-coll]
-                    {:ip-address address
+        service-data-coll (partition 4 (unpack data))
+        services (for [[address port service-name attr-edn] service-data-coll]
+                    {:address address
+                     :port port
                      :service-name service-name
                      :attributes (edn/read-string attr-edn)})]
     (ServiceFound. services)))

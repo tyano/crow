@@ -110,7 +110,11 @@
   (log/trace "discovery: service-name:" service-name " attributes:" (pr-str attributes))
   (trace-pr "discovery response:"
     (if-let [services (not-empty (find-matched-services registrar service-name attributes))]
-      (let [service-coll (map #(into {} %) services)]
+      (let [service-coll (for [svc services]
+                            {:address      (:address svc)
+                             :port         (:port svc)
+                             :service-name (:name svc)
+                             :attributes   (:attributes svc)})]
         (service-found service-coll))
       (do
         (log/debug "service not found.")

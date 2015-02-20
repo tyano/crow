@@ -4,7 +4,9 @@
             [crow.request :refer [send] :as request]
             [manifold.deferred :refer [chain] :as d]
             [clojure.core.async :refer [go >! chan <!!]]
-            [crow.discovery :refer [discover service-finder]]))
+            [crow.discovery :refer [discover service-finder]]
+            [crow.logging :refer [debug-pr]]
+            [clojure.tools.logging :as log]))
 
 (defn invoke
   [{:keys [address port] :as service} target-ns fn-name & args]
@@ -22,9 +24,11 @@
               (go (>! ch (:obj msg)))
 
               :else
-              (go (>! ch (IllegalStateException. "No such message format: " (pr-str msg)))))))
+              (go (>! ch (IllegalStateException. (str "No such message format: " (pr-str msg))))))))
         (d/catch
-          #(go (>! ch %))))
+          #(do
+            (log/error %)
+            (go (>! ch %)))))
     ch))
 
 (def ^:dynamic *default-finder*)
@@ -54,13 +58,13 @@
 
 (defn invoke-with-service-finder
   [service-name attributes target-ns fn-name & args]
-  (if-let [service (discover *default-finder* service-name attributes)]
-    (apply invoke service target-ns fn-name args)
+  (if-let [services (seq (discover *default-finder* service-name attributes))]
+    (apply invoke (first services) target-ns fn-name args)
     (throw (IllegalStateException. (format "Service Not Found: service-name=%s, attributes=%s"
                                       service-name
                                       (pr-str attributes))))))
 
-(defmacro exec
+(defmacro async
   ([call-list]
    (let [namespace-fn (first call-list)
          namespace-str (str namespace-fn)
@@ -83,13 +87,7 @@
         (debug-pr "remote call: " ~namespace-str)
         (invoke-with-service-finder ~service-name ~attributes ~target-ns ~fn-name ~@args)))))
 
-(defmacro async
-  ([call-list]
-    `(exec ~call-list))
-  ([service-namespace attributes call-list]
-    `(exec ~service-namespace ~attributes ~call-list)))
-
-(defn- <!!+
+(defn <!!+
   "read a channel and if the result value is an instance of
    Throwable, then throw the exception. Otherwise returns the
    result.

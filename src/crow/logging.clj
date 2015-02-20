@@ -19,6 +19,10 @@
   ([msg value] `(log-output ~'debug true ~msg ~value))
   ([value]     `(log-output ~'debug true ~value)))
 
+(defmacro info-pr
+  ([msg value] `(log-output ~'info true ~msg ~value))
+  ([value]     `(log-output ~'info true ~value)))
+
 (defmacro error-pr
   ([msg value] `(log-output ~'error true ~msg ~value))
   ([value]     `(log-output ~'error true ~value)))

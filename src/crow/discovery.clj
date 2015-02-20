@@ -32,7 +32,7 @@
             (let [msg @(send address port (ping))]
               (if (ack? msg)
                 (do
-                  (trace-pr "registrar revived: " registrar)
+                  (info-pr "registrar revived: " registrar)
                   (dosync
                     (alter (:dead-registrars finder) disj registrar)
                     (alter (:active-registrars finder) conj registrar)))
@@ -73,13 +73,18 @@
                        (fn [msg]
                          (cond
                            (false? msg)
-                              (throw+ {:type ::can-not-connect, :address address, :port port})
+                           (throw+ {:type ::can-not-connect, :address address, :port port})
+
                            (service-found? msg)
-                              msg
+                           (do
+                              (trace-pr "service-found: " msg)
+                              (vec (:services msg)))
+
                            (service-not-found? msg)
-                              nil
+                           nil
+
                            :else
-                              (throw+ {:type ::illegal-reponse, :response msg}))))
+                           (throw+ {:type ::illegal-reponse, :response msg}))))
                      (d/catch Throwable
                         (fn [th]
                            (log/error th "An error occured when sending a discovery request.")

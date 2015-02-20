@@ -12,7 +12,7 @@
             [clojure.core.async :refer [go-loop chan <! onto-chan thread]]
             [crow.service :as sv]
             [clojure.tools.logging :as log]
-            [crow.logging :refer [trace-pr]]
+            [crow.logging :refer [trace-pr debug-pr info-pr]]
             [byte-streams :refer [to-byte-array]]
             [clojure.set :refer [superset?]])
   (:import [java.util UUID]))
@@ -33,7 +33,7 @@
 
 (defn accept-service-registration
   [registrar address port sid service-name attributes]
-  (log/trace "service registration:" address port sid service-name (pr-str attributes))
+  (log/debug "service registration:" address port sid service-name (pr-str attributes))
   (let [service-id (or sid (new-service-id))
         expire-at  (-> (now) (plus (millis (:renewal-ms registrar))))
         services   (swap! (:services registrar)
@@ -44,7 +44,7 @@
                                               service-name
                                               attributes
                                               expire-at)))]
-    (trace-pr "registered:"
+    (debug-pr "registered:"
       (registration service-id expire-at))))
 
 
@@ -75,7 +75,7 @@
   (go-loop []
     (let [[service-id service-info] (<! ch)]
       (when (after? (now) (:expire-at service-info))
-        (trace-pr "service expired:" service-info)
+        (info-pr "service expired:" service-info)
         (service-expired registrar service-id)))
     (recur)))
 
@@ -107,8 +107,8 @@
 
 (defn accept-discovery
   [registrar service-name attributes]
-  (log/trace "discovery: service-name:" service-name " attributes:" (pr-str attributes))
-  (trace-pr "discovery response:"
+  (log/debug "discovery: service-name:" service-name " attributes:" (pr-str attributes))
+  (debug-pr "discovery response:"
     (if-let [services (not-empty (find-matched-services registrar service-name attributes))]
       (let [service-coll (for [svc services]
                             {:address      (:address svc)

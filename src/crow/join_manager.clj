@@ -141,7 +141,7 @@
                     true)
               (lease-expired? msg)
                   (do
-                    (log/trace "expired: " (service-id service))
+                    (log/info "expired: " (service-id service))
                     (service-expired! join-mgr service registrar)
                     false)
               :else
@@ -268,7 +268,7 @@
                     (cond
                       (ack? resp)
                         (do
-                          (log/trace "A registrar revived: " (pr-str registrar))
+                          (log/info "A registrar revived: " (pr-str registrar))
                           (registrar-revived! join-mgr registrar))
                       :else nil)))))
             (catch Throwable th

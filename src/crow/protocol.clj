@@ -177,20 +177,20 @@
   (CallResult. obj))
 
 
-(defrecord CallException [stack-trace-str])
+(defrecord CallException [stack-trace])
 
 (defext CallException type-call-exception [ent]
-  (pack (:stack-trace-str ent)))
+  (pack (:stack-trace ent)))
 
 (defmethod restore-ext type-call-exception
   [ext]
   (let [data ^bytes (:data ext)
-        stack-trace-str (unpack data)]
-    (CallException. stack-trace-str)))
+        stack-trace (unpack data)]
+    (CallException. stack-trace)))
 
 (defn call-exception
-  [stack-trace-str]
-  (CallException. stack-trace-str))
+  [stack-trace]
+  (CallException. stack-trace))
 
 
 

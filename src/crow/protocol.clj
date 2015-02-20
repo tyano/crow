@@ -300,6 +300,14 @@
   [msg]
   (instance? RemoteCall msg))
 
+(defn call-exception?
+  [msg]
+  (instance? CallException msg))
+
+(defn call-result?
+  [msg]
+  (instance? CallResult msg))
+
 (defn discovery?
   [msg]
   (instance? Discovery msg))

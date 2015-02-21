@@ -146,13 +146,13 @@
 (defrecord RemoteCall [target-ns fn-name args])
 
 (defext RemoteCall type-remote-call [ent]
-  (pack [(:target-ns ent) (:fn-name ent) (marshal (:args ent))]))
+  (pack [(:target-ns ent) (:fn-name ent) (map marshal (:args ent))]))
 
 (defmethod restore-ext type-remote-call
   [ext]
   (let [data ^bytes (:data ext)
-        [target-ns fn-name args-marshalled] (unpack data)
-        args (unmarshal args-marshalled)]
+        [target-ns fn-name args] (unpack data)
+        args (map unmarshal args)]
     (RemoteCall. target-ns fn-name args)))
 
 (defn remote-call
@@ -180,7 +180,7 @@
 (defrecord CallException [stack-trace])
 
 (defext CallException type-call-exception [ent]
-  (pack (:stack-trace ent)))
+  (pack ^String (:stack-trace ent)))
 
 (defmethod restore-ext type-call-exception
   [ext]

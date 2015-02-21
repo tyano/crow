@@ -26,9 +26,7 @@
               :else
               (go (>! ch (IllegalStateException. (str "No such message format: " (pr-str msg))))))))
         (d/catch
-          #(do
-            (log/error %)
-            (go (>! ch %)))))
+          #(go (>! ch %))))
     ch))
 
 (def ^:dynamic *default-finder*)

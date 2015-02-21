@@ -3,7 +3,7 @@
             [manifold.stream :refer [connect] :as s]
             [msgpack.core :refer [pack] :as msgpack]
             [crow.protocol :refer [remote-call? invalid-message protocol-error call-result call-exception] :as p]
-            [crow.request :refer [read-message]]
+            [crow.request :refer [read-message to-frame frame-decorder]]
             [crow.join-manager :refer [start-join-manager join]]
             [clojure.tools.logging :as log]
             [crow.logging :refer [trace-pr]]
@@ -77,7 +77,7 @@
   (let [source (->> stream
                   (s/map read-message)
                   (s/map (partial handle-request service))
-                  (s/map pack))]
+                  (s/map (comp to-frame pack)))]
     (s/connect source stream)))
 
 (defn start-service
@@ -85,7 +85,10 @@
   {:pre [port (not (clojure.string/blank? name)) id-store (seq public-namespaces) registrar-source fetch-registrar-interval-ms heart-beat-buffer-ms]}
   (let [sid     (id/read id-store)
         service (new-service address port sid name attributes id-store (set public-namespaces))]
-    (tcp/start-server (partial service-handler service) {:port port})
+    (tcp/start-server
+      (partial service-handler service)
+      {:port port
+       :pipeline-transform #(.addFirst % "framer" (frame-decorder))})
     (let [join-mgr (start-join-manager registrar-source
                                        fetch-registrar-interval-ms
                                        dead-registrar-check-interval

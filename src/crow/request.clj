@@ -4,11 +4,23 @@
             [manifold.stream :refer [try-put! try-take! close!] :as s]
             [manifold.deferred :refer [let-flow chain] :as d]
             [msgpack.core :refer [pack unpack] :as msgpack]
+            [msgpack.io :refer [ubytes int->bytes]]
             [clojure.tools.logging :as log]
             [crow.logging :refer [trace-pr]]
             [crow.protocol :refer [restore-ext]]
             [byte-streams :refer [to-byte-array]])
-  (:import [msgpack.core Extension]))
+  (:import [msgpack.core Extension]
+           [io.netty.handler.codec LengthFieldBasedFrameDecoder]))
+
+
+(defn frame-decorder
+  []
+  (LengthFieldBasedFrameDecoder.
+    (int Integer/MAX_VALUE) ;maxFrameLength
+    (int 0)   ;lengthFieldOffset
+    (int 4)   ;lengthFieldLength
+    (int 0)   ;lengthAdjustment
+    (int 4))) ;initialBytesToStrip
 
 
 (defn unpack-message
@@ -20,11 +32,16 @@
 
 (def ^:dynamic *send-recv-timeout* 2000)
 
+(defn to-frame
+  [^bytes bytes]
+  (let [len (count bytes)]
+    (ubytes (concat (int->bytes len) bytes))))
+
 (defn send!
   "convert object into bytes and send the bytes into stream.
   returns a differed object holding true or false."
   [stream obj]
-  (try-put! stream (pack obj) *send-recv-timeout* ::timeout))
+  (try-put! stream (to-frame (pack obj)) *send-recv-timeout* ::timeout))
 
 (defn read-message
   "convert byte-buffer to byte-array and unpack the byte-array to a message format."
@@ -32,7 +49,7 @@
   (case data
     ::drained data
     ::timeout data
-    (-> data to-byte-array unpack-message)))
+    (unpack-message data)))
 
 (defn recv!
   "read from stream and unpack the received bytes.
@@ -41,10 +58,11 @@
   (chain (try-take! stream ::drained *send-recv-timeout* ::timeout)
          read-message))
 
-
 (defn send
   [address port req]
-  (chain (tcp/client {:host address, :port port})
+  (chain (tcp/client {:host address,
+                      :port port,
+                      :pipeline-transform #(.addFirst % "framer" (frame-decorder))})
     (fn [stream]
       (-> (chain (send! stream req)
             (fn [sent]

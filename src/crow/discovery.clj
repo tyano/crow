@@ -11,7 +11,7 @@
             [clojure.tools.logging :as log]
             [slingshot.slingshot :refer [throw+]]
             [clojure.core.async :refer [thread]]
-            [crow.logging :refer [trace-pr]]))
+            [crow.logging :refer [trace-pr info-pr]]))
 
 (def ^:dynamic *dead-registrar-check-interval-ms* 30000)
 

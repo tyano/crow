@@ -7,7 +7,7 @@
                                    join-request? heart-beat? discovery? ping?
                                    protocol-error ack
                                    service-found service-not-found] :as p]
-            [crow.request :refer [read-message]]
+            [crow.request :refer [read-message to-frame frame-decorder]]
             [msgpack.core :refer [pack] :as msgpack]
             [clojure.core.async :refer [go-loop chan <! onto-chan thread]]
             [crow.service :as sv]
@@ -139,7 +139,7 @@
   (let [source (->> stream
                   (s/map read-message)
                   (s/map (partial handle-request registrar renewal-ms))
-                  (s/map pack))]
+                  (s/map (comp to-frame pack)))]
     (s/connect source stream)))
 
 
@@ -155,7 +155,10 @@
         handler   (partial registrar-handler registrar renewal-ms)]
     (log/info (str "#### REGISTRAR SERVICE (name: " (pr-str name) " port: " port ") starts."))
     (process-registrar registrar)
-    (tcp/start-server handler {:port port})))
+    (tcp/start-server
+      handler
+      {:port port
+       :pipeline-transform #(.addFirst % "framer" (frame-decorder))})))
 
 
 (defn -main

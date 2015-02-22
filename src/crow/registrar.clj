@@ -7,7 +7,7 @@
                                    join-request? heart-beat? discovery? ping?
                                    protocol-error ack
                                    service-found service-not-found] :as p]
-            [crow.request :refer [read-message to-frame frame-decorder]]
+            [crow.request :refer [read-message frame-decorder]]
             [msgpack.core :refer [pack] :as msgpack]
             [clojure.core.async :refer [go-loop chan <! onto-chan thread]]
             [crow.service :as sv]
@@ -139,7 +139,7 @@
   (let [source (->> stream
                   (s/map read-message)
                   (s/map (partial handle-request registrar renewal-ms))
-                  (s/map (comp to-frame pack)))]
+                  (s/map pack))]
     (s/connect source stream)))
 
 

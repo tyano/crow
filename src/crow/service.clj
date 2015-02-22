@@ -3,7 +3,7 @@
             [manifold.stream :refer [connect] :as s]
             [msgpack.core :refer [pack] :as msgpack]
             [crow.protocol :refer [remote-call? invalid-message protocol-error call-result call-exception] :as p]
-            [crow.request :refer [read-message to-frame frame-decorder]]
+            [crow.request :refer [read-message frame-decorder]]
             [crow.join-manager :refer [start-join-manager join]]
             [clojure.tools.logging :as log]
             [crow.logging :refer [trace-pr]]
@@ -77,7 +77,7 @@
   (let [source (->> stream
                   (s/map read-message)
                   (s/map (partial handle-request service))
-                  (s/map (comp to-frame pack)))]
+                  (s/map pack))]
     (s/connect source stream)))
 
 (defn start-service

@@ -10,6 +10,7 @@
   <logger name="crow" level="TRACE" />
   <logger name="aleph" level="INFO" />
   <logger name="io.netty" level="INFO" />
+  <logger name="com.shelf.messagepack" level="INFO" />
 
   <root level="INFO">
     <appender-ref ref="STDOUT" />

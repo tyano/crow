@@ -10,17 +10,14 @@
             [crow.protocol :refer [restore-ext]]
             [byte-streams :refer [to-byte-array]])
   (:import [msgpack.core Extension]
-           [io.netty.handler.codec LengthFieldBasedFrameDecoder]))
+           [com.shelf.messagepack MessagePackFrameDecoder]))
 
 
 (defn frame-decorder
   []
-  (LengthFieldBasedFrameDecoder.
+  (MessagePackFrameDecoder.
     (int Integer/MAX_VALUE) ;maxFrameLength
-    (int 0)   ;lengthFieldOffset
-    (int 4)   ;lengthFieldLength
-    (int 0)   ;lengthAdjustment
-    (int 4))) ;initialBytesToStrip
+    false)) ;fail-fast
 
 
 (defn unpack-message
@@ -32,16 +29,11 @@
 
 (def ^:dynamic *send-recv-timeout* 2000)
 
-(defn to-frame
-  [^bytes bytes]
-  (let [len (count bytes)]
-    (ubytes (concat (int->bytes len) bytes))))
-
 (defn send!
   "convert object into bytes and send the bytes into stream.
   returns a differed object holding true or false."
   [stream obj]
-  (try-put! stream (to-frame (pack obj)) *send-recv-timeout* ::timeout))
+  (try-put! stream (pack obj) *send-recv-timeout* ::timeout))
 
 (defn read-message
   "convert byte-buffer to byte-array and unpack the byte-array to a message format."

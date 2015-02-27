@@ -89,7 +89,7 @@
                         (fn [th]
                            (log/error th "An error occured when sending a discovery request.")
                            (abandon-registrar! finder registrar)
-                           th)))]
+                           (throw th))))]
     (if (instance? Throwable result)
       (throw result)
       result)))

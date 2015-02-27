@@ -41,7 +41,8 @@
   (case data
     ::drained data
     ::timeout data
-    (unpack-message data)))
+    (let [barray (to-byte-array data)] ;TODO this action is not required at newest Aleph, but it is needed yet at 0.4.0-beta3.
+      (unpack-message barray))))
 
 (defn recv!
   "read from stream and unpack the received bytes.

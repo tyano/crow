@@ -16,13 +16,13 @@
 (defrecord UrlRegistrarSource [source-url]
   RegistrarSource
   (registrars [source]
-    (chain (http/get source-url)
-      :body
-      bs/to-line-seq
-      (fn [lines]
+    (-> @(http/get source-url)
+      (:body)
+      (bs/to-line-seq)
+      ((fn [lines]
         (for [line lines]
           (let [[address port-str] (split line #":")]
-            {:address address, :port (Long/valueOf ^String port-str)}))))))
+            {:address address, :port (Long/valueOf ^String port-str)})))))))
 
 (defn url-registrar-source [source-url] (UrlRegistrarSource. source-url))
 

@@ -59,13 +59,13 @@
 (defrecord JoinRequest [address port service-id service-name attributes])
 
 (defext JoinRequest type-join-request [ent]
-  (pack [(:address ent) (:port ent) (:service-id ent) (:service-name ent) (:attributes ent)]))
+  (pack [(:address ent) (:port ent) (:service-id ent) (:service-name ent) (pr-str (:attributes ent))]))
 
 (defmethod restore-ext type-join-request
   [ext]
   (let [data ^bytes (:data ext)
-        [address port service-id service-name attributes] (unpack data)]
-    (JoinRequest. address port service-id service-name attributes)))
+        [address port service-id service-name attributes-edn] (unpack data)]
+    (JoinRequest. address port service-id service-name (edn/read-string attributes-edn))))
 
 (defn join-request
   [address port service-id service-name attributes]

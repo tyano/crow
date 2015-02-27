@@ -207,7 +207,7 @@
         (log/info "registrar-fetcher stopped.")
         (do
           (try
-            (log/debug "Resetting registrars from registrar-source.")
+            (log/trace "Resetting registrars from registrar-source.")
             (let [registrars (source/registrars registrar-source)]
               (reset-registrars! join-mgr registrars))
             (Thread/sleep fetch-registrar-interval-ms)
@@ -229,7 +229,7 @@
                               {:keys [expire-at] :as reg} @(:registrars service)
                               :when (after? (plus (now) (millis heart-beat-buffer-ms)) expire-at)]
                           [service reg]))]
-              (log/debug "send heart-beat from" (pr-str service) "to" (pr-str reg))
+              (log/trace "send heart-beat from" (pr-str service) "to" (pr-str reg))
               (-> (send-heart-beat! join-mgr service reg)
                   (d/catch
                     #(log/error % "Could not send heart-beat to " (pr-str reg)))))

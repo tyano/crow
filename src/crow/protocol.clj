@@ -22,8 +22,8 @@
 (def ^:const type-service-not-found  13)
 
 (defn date->bytes
-  "clj-timeのDateTimeオブジェクトを、年（西暦）、月、日、時、分、秒に分解し、
-  それぞれint,byte,byte,byte,byte,byteとしてバイト配列化して結合したバイト列を作ります。"
+  "devide an DateTime object of clj-time into year, month, day, hour, minute and seconds,
+  convert each element intto byte-arrays, and then combine them into one byte-array."
   [t]
   (let [year-bytes   (int->bytes  (year t))
         month-bytes  (byte->bytes (month t))
@@ -34,7 +34,7 @@
     (ubytes (concat year-bytes month-bytes day-bytes hour-bytes minute-bytes second-bytes))))
 
 (defn bytes->date
-  "date->bytesによってバイト配列化されたclj-time DateTimeオブジェクトを復元します。"
+  "restore a DateTime object from an byte-array created by date->bytes."
   [data]
   (let [stream      (byte-stream data)
         year-int    (next-int stream)
@@ -47,8 +47,10 @@
 
 
 (defmulti restore-ext
-  "Extensionオブジェクトから元のrecordを復元します。typeを使ってどのrecordであるかを特定します。
-  新しいExtensionを追加したら、そのtypeを使って、defmethodも追加しなければなりません。"
+  "restore an original record from an Extention record.
+  This fn uses the type of Extention for identify the original record.
+  If you create a new Extention type and a record for the Extention,
+  you must create a new defmethod for the type of Extention."
   (fn [ext] (:type ext)))
 
 (defmethod restore-ext :default [ext] ext)

@@ -1,13 +1,12 @@
 (ns crow.configuration
   (:require [clojure.java.io :refer [reader]]
-            [clojure.edn :as edn])
-  (:import [java.io PushbackReader]))
+            [clojure.edn :as edn]))
 
 
-(defn- read-from-file [file-path]
-  (with-open [r (PushbackReader. (reader file-path))]
-    (binding [*read-eval* false]
-      (read r))))
+(defn- read-from-file
+  [file-path]
+  (with-open [rdr (reader file-path)]
+    (load-reader rdr)))
 
 (defn- assert-map
   [config]

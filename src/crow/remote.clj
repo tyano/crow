@@ -53,10 +53,13 @@
   [timeout & expr]
   `(with-timeout-fn timeout (fn [] ~@expr)))
 
+(defn find-service
+  [service-name attrs]
+  (discover *default-finder* service-name attrs))
 
 (defn invoke-with-service-finder
   [service-name attributes target-ns fn-name & args]
-  (if-let [services (seq (discover *default-finder* service-name attributes))]
+  (if-let [services (seq (find-service service-name attributes))]
     (apply invoke (first services) target-ns fn-name args)
     (throw (IllegalStateException. (format "Service Not Found: service-name=%s, attributes=%s"
                                       service-name

@@ -42,7 +42,7 @@
 
 (defmacro with-finder
   [finder & expr]
-  `(with-finder-fn finder (fn [] ~@expr)))
+  `(with-finder-fn ~finder (fn [] ~@expr)))
 
 (defn with-timeout-fn
   [timeout f]

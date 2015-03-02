@@ -18,3 +18,7 @@
                    :jvm-opts ["-Djava.net.preferIPv4Stack=true"]}}
   :aot [crow.registrar-source crow.registrar]
   :main crow.registrar)
+
+(cemerick.pomegranate.aether/register-wagon-factory!
+   "scp" #(let [c (resolve 'org.apache.maven.wagon.providers.ssh.external.ScpExternalWagon)]
+                      (clojure.lang.Reflector/invokeConstructor c (into-array []))))

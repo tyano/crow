@@ -2,7 +2,7 @@
   (:require [clojure.edn :as edn]))
 
 
-(defn- primitive-array?
+(defn primitive-array?
   [^Class obj-class]
   (and
     (.isArray obj-class)
@@ -19,14 +19,14 @@
     clojure.lang.BigInt
     clojure.lang.Ratio})
 
-(defn- wrapper-array?
+(defn wrapper-array?
   [^Class obj-class]
   (boolean
     (and
       (.isArray obj-class)
       (wrapper-class (.getComponentType obj-class)))))
 
-(defn- object-type
+(defn object-type
   [obj]
   (let [obj-class ^Class (class obj)]
     (cond
@@ -37,12 +37,23 @@
       (wrapper-array? obj-class)   :primitive-array
       :else :object)))
 
-(defmulti marshal "convert an object into other msgpack-safe object." (fn [obj] (object-type obj)))
-(defmulti unmarshal "convert an object from msgpack-safe format to a real object." (fn [obj] (class obj)))
+(defmulti -marshal "convert an object into other msgpack-safe object." (fn [obj] (object-type obj)))
+(defmulti -unmarshal "convert an object from msgpack-safe format to a real object." (fn [obj] (class obj)))
 
-(defmethod marshal :primitive [obj] obj)
-(defmethod marshal :primitive-array [obj] obj)
-(defmethod marshal :default [obj] (pr-str obj))
+(defmethod -marshal :primitive [obj] obj)
+(defmethod -marshal :primitive-array [obj] obj)
+(defmethod -marshal :default [obj] (pr-str obj))
 
-(defmethod unmarshal String [obj] (edn/read-string obj))
-(defmethod unmarshal :default [obj] obj)
+(defmethod -unmarshal String [obj] (edn/read-string obj))
+(defmethod -unmarshal :default [obj] obj)
+
+(defprotocol ObjectMarshaller
+  (marshal [this obj] "convert an object to serialized form.")
+  (unmarshal [this obj] "convert an marshalled object to a clojure object."))
+
+(defrecord EdnObjectMarshaller
+  []
+  ObjectMarshaller
+  (marshal [this obj] (-marshal obj))
+  (unmarshal [this obj] (-unmarshal obj)))
+

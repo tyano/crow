@@ -4,7 +4,7 @@
             [msgpack.io :refer [ubytes byte-stream next-int next-byte int->bytes byte->bytes] :as io]
             [clj-time.core :refer [year month day hour minute second date-time]]
             [clojure.edn :as edn]
-            [crow.marshaller :refer [marshal unmarshal]]))
+            [crow.marshaller :refer [marshal unmarshal ->EdnObjectMarshaller]]))
 
 (def ^:const separator 0x00)
 (def ^:const type-join-request    1)
@@ -20,6 +20,12 @@
 (def ^:const type-discovery      11)
 (def ^:const type-service-found  12)
 (def ^:const type-service-not-found  13)
+
+(def ^:dynamic *object-marshaller* (->EdnObjectMarshaller))
+
+(defn install-default-marshaller
+  [marshaller]
+  (alter-var-root *object-marshaller* (fn [_] marshaller)))
 
 (defn date->bytes
   "devide an DateTime object of clj-time into year, month, day, hour, minute and seconds,
@@ -148,13 +154,13 @@
 (defrecord RemoteCall [target-ns fn-name args])
 
 (defext RemoteCall type-remote-call [ent]
-  (pack [(:target-ns ent) (:fn-name ent) (map marshal (:args ent))]))
+  (pack [(:target-ns ent) (:fn-name ent) (map (partial marshal *object-marshaller*) (:args ent))]))
 
 (defmethod restore-ext type-remote-call
   [ext]
   (let [data ^bytes (:data ext)
         [target-ns fn-name args] (unpack data)
-        args (map unmarshal args)]
+        args (map (partial unmarshal *object-marshaller*) args)]
     (RemoteCall. target-ns fn-name args)))
 
 (defn remote-call
@@ -165,13 +171,13 @@
 (defrecord CallResult [obj])
 
 (defext CallResult type-call-result [ent]
-  (pack (marshal (:obj ent))))
+  (pack (marshal *object-marshaller* (:obj ent))))
 
 (defmethod restore-ext type-call-result
   [ext]
   (let [data ^bytes (:data ext)
         obj-marshalled (unpack data)
-        obj (unmarshal obj-marshalled)]
+        obj (unmarshal *object-marshaller* obj-marshalled)]
     (CallResult. obj)))
 
 (defn call-result

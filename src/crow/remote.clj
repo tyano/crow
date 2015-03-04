@@ -59,7 +59,7 @@
 
 (defmacro with-timeout
   [timeout & expr]
-  `(with-timeout-fn timeout (fn [] ~@expr)))
+  `(with-timeout-fn ~timeout (fn [] ~@expr)))
 
 (defn find-service
   [service-name attrs]

@@ -83,6 +83,7 @@
 (defn start-service
   [{:keys [address port name attributes id-store public-namespaces registrar-source fetch-registrar-interval-ms heart-beat-buffer-ms dead-registrar-check-interval rejoin-interval-ms], :as config, :or {address "localhost" attributes {}}}]
   {:pre [port (not (clojure.string/blank? name)) id-store (seq public-namespaces) registrar-source fetch-registrar-interval-ms heart-beat-buffer-ms]}
+  (apply require (map symbol public-namespaces))
   (let [sid     (id/read id-store)
         service (new-service address port sid name attributes id-store (set public-namespaces))]
     (tcp/start-server

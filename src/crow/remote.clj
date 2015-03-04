@@ -6,7 +6,8 @@
             [clojure.core.async :refer [go >! chan <!! close!]]
             [crow.discovery :refer [discover service-finder]]
             [crow.logging :refer [debug-pr]]
-            [clojure.tools.logging :as log]))
+            [clojure.tools.logging :as log]
+            [slingshot.slingshot :refer [throw+]]))
 
 (defn invoke
   [{:keys [address port] :as service} target-ns fn-name & args]
@@ -63,6 +64,8 @@
 
 (defn find-service
   [service-name attrs]
+  (when-not *default-finder*
+    (throw+ {:type :finder-not-found, :message "ServiceFinder doesn't exist! You must start a service finder by start-service-finder at first!"}))
   (discover *default-finder* service-name attrs))
 
 (defn invoke-with-service-finder

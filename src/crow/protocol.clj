@@ -4,7 +4,8 @@
             [msgpack.io :refer [ubytes byte-stream next-int next-byte int->bytes byte->bytes] :as io]
             [clj-time.core :refer [year month day hour minute second date-time]]
             [clojure.edn :as edn]
-            [crow.marshaller :refer [marshal unmarshal ->EdnObjectMarshaller]]))
+            [crow.marshaller :refer [marshal unmarshal ->EdnObjectMarshaller]]
+            [clojure.tools.logging :as log]))
 
 (def ^:const separator 0x00)
 (def ^:const type-join-request    1)
@@ -71,7 +72,12 @@
   [ext]
   (let [data ^bytes (:data ext)
         [address port service-id service-name attributes-edn] (unpack data)]
-    (JoinRequest. address port service-id service-name (edn/read-string attributes-edn))))
+    (try
+      (let [attributes (edn/read-string attributes-edn)]
+        (JoinRequest. address port service-id service-name attributes))
+      (catch Throwable th
+        (log/error th (str "address: " address ", port: " port ", service-id: " service-id ", service-name: " service-name ", attributes: " attributes-edn))
+        (throw th)))))
 
 (defn join-request
   [address port service-id service-name attributes]
@@ -226,9 +232,13 @@
 (defmethod restore-ext type-discovery
   [ext]
   (let [data ^bytes (:data ext)
-        [service-name attr-edn] (unpack data)
-        attributes (edn/read-string attr-edn)]
-    (Discovery. service-name attributes)))
+        [service-name attr-edn] (unpack data)]
+    (try
+      (let [attributes (edn/read-string attr-edn)]
+        (Discovery. service-name attributes))
+      (catch Throwable th
+        (log/error th (str "service-name: " service-name ", attributes: " attr-edn))
+        (throw th)))))
 
 (defn discovery
   [service-name attributes]
@@ -247,10 +257,15 @@
   (let [data ^bytes (:data ext)
         service-data-coll (partition 4 (unpack data))
         services (for [[address port service-name attr-edn] service-data-coll]
-                    {:address address
-                     :port port
-                     :service-name service-name
-                     :attributes (edn/read-string attr-edn)})]
+                    (try
+                      (let [attributes (edn/read-string attr-edn)]
+                        {:address address
+                         :port port
+                         :service-name service-name
+                         :attributes attributes})
+                      (catch Throwable th
+                        (log/error th (str "address: " address ", port: " port ", service-name: " service-name ", attributes: " attr-edn))
+                        (throw th))))]
     (ServiceFound. services)))
 
 (defn service-found
@@ -267,9 +282,13 @@
 (defmethod restore-ext type-service-not-found
   [ext]
   (let [data ^bytes (:data ext)
-        [service-name attr-edn] (unpack data)
-        attributes (edn/read-string attr-edn)]
-    (ServiceNotFound. service-name attributes)))
+        [service-name attr-edn] (unpack data)]
+    (try
+      (let [attributes (edn/read-string attr-edn)]
+        (ServiceNotFound. service-name attributes))
+      (catch Throwable th
+        (log/error th (str "service-name: " service-name ", attributes: " attr-edn))
+        (throw th)))))
 
 (defn service-not-found
   [service-name attributes]

@@ -25,7 +25,7 @@
 
 (defn install-default-marshaller
   [marshaller]
-  (alter-var-root *object-marshaller* (fn [_] marshaller)))
+  (alter-var-root #'*object-marshaller* (fn [_] marshaller)))
 
 (defn date->bytes
   "devide an DateTime object of clj-time into year, month, day, hour, minute and seconds,

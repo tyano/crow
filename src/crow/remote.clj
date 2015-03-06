@@ -9,32 +9,43 @@
             [clojure.tools.logging :as log]
             [slingshot.slingshot :refer [throw+]]))
 
+(def ^:dynamic *retry-interval* 3000)
+
 (defn invoke
   [{:keys [address port] :as service} target-ns fn-name & args]
   (let [ch  (chan)
         msg (remote-call target-ns fn-name args)]
-    (-> (send address port msg)
-        (chain
-          (fn [msg]
-            (cond
-              (call-exception? msg)
-              (let [stack-trace (:stack-trace msg)]
-                (>!! ch (Exception. ^String stack-trace))
-                (close! ch))
+    (d/loop [retry-count 3 timeout-ms request/*send-recv-timeout*]
+      (if (= retry-count 0)
+        (>!! ch (IllegalStateException. "retry timeout!!"))
+        (binding [request/*send-recv-timeout* timeout-ms]
+          (-> (send address port msg)
+              (chain
+                (fn [msg]
+                  (cond
+                    (call-exception? msg)
+                    (let [stack-trace (:stack-trace msg)]
+                      (>!! ch (Exception. ^String stack-trace))
+                      (close! ch))
 
-              (call-result? msg)
-              (if-let [result (:obj msg)]
-                (do
-                  (>!! ch result)
-                  (close! ch))
-                (close! ch))
+                    (call-result? msg)
+                    (if-let [result (:obj msg)]
+                      (do
+                        (>!! ch result)
+                        (close! ch))
+                      (close! ch))
 
-              :else
-              (do
-                (>!! ch (IllegalStateException. (str "No such message format: " (pr-str msg))))
-                (close! ch)))))
-        (d/catch
-          #(>!! ch %)))
+                    :crow.request/timeout
+                    (do
+                      (Thread/sleep *retry-interval*)
+                      (d/recur (dec retry-count) timeout-ms))
+
+                    :else
+                    (do
+                      (>!! ch (IllegalStateException. (str "No such message format: " (pr-str msg))))
+                      (close! ch)))))
+              (d/catch
+                #(>!! ch %))))))
     ch))
 
 (def ^:dynamic *default-finder*)

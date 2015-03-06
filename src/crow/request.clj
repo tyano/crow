@@ -8,7 +8,8 @@
             [clojure.tools.logging :as log]
             [crow.logging :refer [trace-pr]]
             [crow.protocol :refer [restore-ext]]
-            [byte-streams :refer [to-byte-array]])
+            [byte-streams :refer [to-byte-array]]
+            [clojure.tools.logging :as log])
   (:import [msgpack.core Extension]
            [com.shelf.messagepack MessagePackFrameDecoder]))
 
@@ -53,6 +54,7 @@
 
 (defn send
   [address port req]
+  (log/trace "send-recv-timeout:" *send-recv-timeout*)
   (chain (tcp/client {:host address,
                       :port port,
                       :pipeline-transform #(.addFirst % "framer" (frame-decorder))})

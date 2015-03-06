@@ -3,7 +3,7 @@
   (:require [crow.protocol :refer [remote-call call-result? call-exception?]]
             [crow.request :refer [send] :as request]
             [manifold.deferred :refer [chain] :as d]
-            [clojure.core.async :refer [go >! chan <!! close!]]
+            [clojure.core.async :refer [>!! chan <!! close!]]
             [crow.discovery :refer [discover service-finder]]
             [crow.logging :refer [debug-pr]]
             [clojure.tools.logging :as log]
@@ -19,23 +19,22 @@
             (cond
               (call-exception? msg)
               (let [stack-trace (:stack-trace msg)]
-                (go
-                  (>! ch (Exception. ^String stack-trace))
-                  (close! ch)))
+                (>!! ch (Exception. ^String stack-trace))
+                (close! ch))
 
               (call-result? msg)
               (if-let [result (:obj msg)]
-                (go
-                  (>! ch result)
+                (do
+                  (>!! ch result)
                   (close! ch))
                 (close! ch))
 
               :else
-              (go
-                (>! ch (IllegalStateException. (str "No such message format: " (pr-str msg))))
+              (do
+                (>!! ch (IllegalStateException. (str "No such message format: " (pr-str msg))))
                 (close! ch)))))
         (d/catch
-          #(go (>! ch %))))
+          #(>!! ch %)))
     ch))
 
 (def ^:dynamic *default-finder*)

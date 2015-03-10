@@ -135,8 +135,9 @@
     :else               (invalid-message msg)))
 
 (defn registrar-handler
-  [registrar renewal-ms stream info]
+  [registrar renewal-ms buffer-size stream info]
   (let [source (->> stream
+                  (s/buffer buffer-size)
                   (s/map read-message)
                   (s/map (partial handle-request registrar renewal-ms))
                   (s/map pack))]
@@ -150,9 +151,9 @@
   :port a waiting port number.
   :renewal-ms  milliseconds for make each registered services expired. Services must send a 'lease' request before the expiration.
   :watch-internal  milliseconds for checking each service is expired or not."
-  [{:keys [port name renewal-ms watch-interval] :or {port 4000, renewal-ms default-renewal-ms, watch-interval default-watch-interval}}]
+  [{:keys [port name renewal-ms watch-interval buffer-size] :or {port 4000, renewal-ms default-renewal-ms, watch-interval default-watch-interval, buffer-size 10}}]
   (let [registrar (new-registrar name renewal-ms watch-interval)
-        handler   (partial registrar-handler registrar renewal-ms)]
+        handler   (partial registrar-handler registrar renewal-ms buffer-size)]
     (log/info (str "#### REGISTRAR SERVICE (name: " (pr-str name) " port: " port ") starts."))
     (process-registrar registrar)
     (tcp/start-server

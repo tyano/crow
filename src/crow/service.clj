@@ -73,21 +73,24 @@
     :else (invalid-message msg)))
 
 (defn- service-handler
-  [service stream info]
+  [service buffer-size stream info]
   (let [source (->> stream
+                  (s/buffer buffer-size)
                   (s/map read-message)
                   (s/map (partial handle-request service))
                   (s/map pack))]
     (s/connect source stream)))
 
 (defn start-service
-  [{:keys [address port name attributes id-store public-namespaces registrar-source fetch-registrar-interval-ms heart-beat-buffer-ms dead-registrar-check-interval rejoin-interval-ms], :as config, :or {address "localhost" attributes {}}}]
+  [{:keys [address port name attributes id-store public-namespaces registrar-source
+           fetch-registrar-interval-ms heart-beat-buffer-ms dead-registrar-check-interval
+           rejoin-interval-ms buffer-size] :or {address "localhost" attributes {} buffer-size 10} :as config}]
   {:pre [port (not (clojure.string/blank? name)) id-store (seq public-namespaces) registrar-source fetch-registrar-interval-ms heart-beat-buffer-ms]}
   (apply require (map symbol public-namespaces))
   (let [sid     (id/read id-store)
         service (new-service address port sid name attributes id-store (set public-namespaces))]
     (tcp/start-server
-      (partial service-handler service)
+      (partial service-handler service buffer-size)
       {:port port
        :pipeline-transform #(.addFirst % "framer" (frame-decorder))})
     (let [join-mgr (start-join-manager registrar-source

@@ -66,7 +66,7 @@
                   (do
                     (log/error (str "Couldn't send a message: " (pr-str req)))
                     false)
-                :crow.protocol/timeout
+                ::timeout
                   (do
                     (log/error (str "Timeout: Couldn't send a message: " (pr-str req)))
                     false)
@@ -74,11 +74,11 @@
             (fn [msg]
               (case msg
                 false false
-                :crow.protocol/timeout
+                ::timeout
                   (do
                     (log/error (str "Timeout: Couldn't receive a response for a req: " (pr-str req)))
                     false)
-                :crow.protocol/drained
+                ::drained
                   (do
                     (log/error (str "Drained: Peer closed: req: " (pr-str req)))
                     false)

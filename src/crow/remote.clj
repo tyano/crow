@@ -25,15 +25,11 @@
                   (cond
                     (call-exception? msg)
                     (let [stack-trace (:stack-trace msg)]
-                      (>!! ch (Exception. ^String stack-trace))
-                      (close! ch))
+                      (>!! ch (Exception. ^String stack-trace)))
 
                     (call-result? msg)
-                    (if-let [result (:obj msg)]
-                      (do
-                        (>!! ch result)
-                        (close! ch))
-                      (close! ch))
+                    (when-some [result (:obj msg)]
+                      (>!! ch result))
 
                     :crow.request/timeout
                     (do
@@ -41,11 +37,11 @@
                       (d/recur (dec retry-count) timeout-ms))
 
                     :else
-                    (do
-                      (>!! ch (IllegalStateException. (str "No such message format: " (pr-str msg))))
-                      (close! ch)))))
+                    (>!! ch (IllegalStateException. (str "No such message format: " (pr-str msg)))))))
               (d/catch
-                #(>!! ch %))))))
+                #(>!! ch %))
+              (d/finally
+                #(close! ch))))))
     ch))
 
 (def ^:dynamic *default-finder*)

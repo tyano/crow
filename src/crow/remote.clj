@@ -63,6 +63,10 @@
   [finder & expr]
   `(with-finder-fn ~finder (fn [] ~@expr)))
 
+(defn set-default-timeout-ms!
+  [timeout]
+  (alter-var-root #'request/*send-recv-timeout* (fn [_] timeout)))
+
 (defn with-timeout-fn
   [timeout f]
   (binding [request/*send-recv-timeout* timeout]

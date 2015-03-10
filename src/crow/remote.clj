@@ -3,7 +3,7 @@
   (:require [crow.protocol :refer [remote-call call-result? call-exception?]]
             [crow.request :refer [send] :as request]
             [manifold.deferred :refer [chain] :as d]
-            [clojure.core.async :refer [>!! chan <!! close!]]
+            [clojure.core.async :refer [>!! chan <!! close! alts!! timeout]]
             [crow.discovery :refer [discover service-finder]]
             [crow.logging :refer [debug-pr]]
             [clojure.tools.logging :as log]
@@ -121,10 +121,15 @@
    this macro will block current thread."
   [ch]
   (when ch
-    (when-let [result (<!! ch)]
-      (if (instance? Throwable result)
-        (throw result)
-        result))))
+    ;; if no data is supplied to ch until 2* msecs of *send-receive-timeout*,
+    ;; it should be a bug...
+    (let [timeout-ch (timeout (* request/*send-recv-timeout* 2))
+          [result c] (alts!! [ch timeout-ch])]
+      (if (= c timeout-ch)
+        (throw+ {:type :channel-read-timeout})
+        (if (instance? Throwable result)
+          (throw result)
+          result)))))
 
 
 (defmacro call

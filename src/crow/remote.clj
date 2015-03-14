@@ -23,6 +23,15 @@
               (chain
                 (fn [msg]
                   (cond
+                    false ; Could'nt send. retry
+                    (do
+                      (Thread/sleep *retry-interval*)
+                      (log/debug (str "RETRY! - remaining retry count : " (dec retry-count)))
+                      (d/recur (dec retry-count) timeout-ms))
+
+                    nil
+                    nil
+
                     (call-exception? msg)
                     (let [stack-trace (:stack-trace msg)]
                       (>!! ch (Exception. ^String stack-trace)))
@@ -34,6 +43,7 @@
                     :crow.request/timeout
                     (do
                       (Thread/sleep *retry-interval*)
+                      (log/debug (str "RETRY! - remaining retry count : " (dec retry-count)))
                       (d/recur (dec retry-count) timeout-ms))
 
                     :else
@@ -117,9 +127,9 @@
    this macro will block current thread."
   [ch]
   (when ch
-    ;; if no data is supplied to ch until 2* msecs of *send-receive-timeout*,
-    ;; it should be a bug...
-    (let [timeout-ch (timeout (* request/*send-recv-timeout* 2))
+    ;; if no data is supplied to ch until 4* msecs of *send-receive-timeout*,
+    ;; it should be a bug... (because invoke will retry only 3 times)
+    (let [timeout-ch (timeout (+ (* request/*send-recv-timeout* 4) (* *retry-interval* 4)))
           [result c] (alts!! [ch timeout-ch])]
       (if (= c timeout-ch)
         (throw+ {:type :channel-read-timeout})

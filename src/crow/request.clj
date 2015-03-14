@@ -34,7 +34,7 @@
   "convert object into bytes and send the bytes into stream.
   returns a differed object holding true or false."
   [stream obj]
-  (try-put! stream (pack obj) *send-recv-timeout* ::timeout))
+  (try-put! stream obj *send-recv-timeout* ::timeout))
 
 (defn read-message
   "convert byte-buffer to byte-array and unpack the byte-array to a message format."
@@ -49,8 +49,26 @@
   "read from stream and unpack the received bytes.
   returns a differed object holding an unpacked object."
   [stream]
-  (chain (try-take! stream ::drained *send-recv-timeout* ::timeout)
-         read-message))
+  (try-take! stream ::drained *send-recv-timeout* ::timeout))
+
+(defn wrap-duplex-stream
+  [stream]
+  (let [out (s/stream)
+        in  (s/stream)]
+    (s/connect
+      (s/map pack out)
+      stream)
+    (s/connect
+      (s/map read-message stream)
+      in)
+    (s/splice out in)))
+
+(defn client
+  [address port]
+  (chain (tcp/client {:host address,
+                      :port port,
+                      :pipeline-transform #(.addFirst % "framer" (frame-decorder))})
+    #(wrap-duplex-stream %)))
 
 (defn send
   [address port req]
@@ -58,31 +76,43 @@
   (chain (tcp/client {:host address,
                       :port port,
                       :pipeline-transform #(.addFirst % "framer" (frame-decorder))})
+    wrap-duplex-stream
     (fn [stream]
-      (-> (chain (send! stream req)
+      (-> (send! stream req)
+          (chain
             (fn [sent]
               (case sent
                 false
-                  (do
-                    (log/error (str "Couldn't send a message: " (pr-str req)))
-                    false)
+                (do
+                  (log/error (str "Couldn't send a message: " (pr-str req)))
+                  false)
+
                 ::timeout
-                  (do
-                    (log/error (str "Timeout: Couldn't send a message: " (pr-str req)))
-                    false)
+                (do
+                  (log/error (str "Timeout: Couldn't send a message: " (pr-str req)))
+                  ::timeout)
+
                 (recv! stream)))
             (fn [msg]
               (case msg
-                false false
+                false
+                false
+
                 ::timeout
-                  (do
-                    (log/error (str "Timeout: Couldn't receive a response for a req: " (pr-str req)))
-                    false)
+                (do
+                  (log/error (str "Timeout: Couldn't receive a response for a req: " (pr-str req)))
+                  ::timeout)
+
                 ::drained
-                  (do
-                    (log/error (str "Drained: Peer closed: req: " (pr-str req)))
-                    false)
+                (do
+                  (log/error (str "Drained: Peer closed: req: " (pr-str req)))
+                  nil)
+
                 msg)))
+          (d/catch
+            (fn [th]
+              (log/error th "send error!")
+              (throw th)))
           (d/finally
             (fn []
               (close! stream)))))))

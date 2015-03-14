@@ -1,9 +1,9 @@
 (ns crow.service
   (:require [aleph.tcp :as tcp]
-            [manifold.stream :refer [connect] :as s]
-            [msgpack.core :refer [pack] :as msgpack]
+            [manifold.stream :refer [connect buffer] :as s]
+            [manifold.deferred :refer [let-flow] :as d]
             [crow.protocol :refer [remote-call? invalid-message protocol-error call-result call-exception] :as p]
-            [crow.request :refer [read-message frame-decorder]]
+            [crow.request :refer [frame-decorder wrap-duplex-stream]]
             [crow.join-manager :refer [start-join-manager join]]
             [clojure.tools.logging :as log]
             [crow.logging :refer [trace-pr]]
@@ -74,12 +74,24 @@
 
 (defn- service-handler
   [service buffer-size stream info]
-  (let [source (->> stream
-                  (s/buffer buffer-size)
-                  (s/map read-message)
-                  (s/map (partial handle-request service))
-                  (s/map pack))]
-    (s/connect source stream)))
+  (let [source (buffer buffer-size stream)]
+    (d/loop []
+      (-> (s/take! source ::none)
+        (d/chain
+          (fn [msg]
+            (if (= msg ::none)
+              ::none
+              (d/future (handle-request service msg))))
+          (fn [msg']
+            (when-not (= msg' ::none)
+              (s/put! stream msg')))
+          (fn [result]
+            (when result
+              (d/recur))))
+        (d/catch
+          (fn [ex]
+            (log/error ex "An Error ocurred.")
+            (s/close! stream)))))))
 
 (defn start-service
   [{:keys [address port name attributes id-store public-namespaces registrar-source
@@ -90,7 +102,8 @@
   (let [sid     (id/read id-store)
         service (new-service address port sid name attributes id-store (set public-namespaces))]
     (tcp/start-server
-      (partial service-handler service buffer-size)
+      (fn [stream info]
+        (service-handler service buffer-size (wrap-duplex-stream stream) info))
       {:port port
        :pipeline-transform #(.addFirst % "framer" (frame-decorder))})
     (let [join-mgr (start-join-manager registrar-source

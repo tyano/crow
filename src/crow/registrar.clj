@@ -1,14 +1,13 @@
 (ns crow.registrar
   (:require [aleph.tcp :refer [start-server] :as tcp]
-            [manifold.deferred :refer [let-flow chain]]
-            [manifold.stream :refer [connect] :as s]
+            [manifold.deferred :refer [let-flow chain] :as d]
+            [manifold.stream :refer [connect buffer] :as s]
             [clj-time.core :refer [now after? plus millis] :as t]
             [crow.protocol :refer [lease lease-expired registration invalid-message
                                    join-request? heart-beat? discovery? ping?
                                    protocol-error ack
                                    service-found service-not-found] :as p]
-            [crow.request :refer [read-message frame-decorder]]
-            [msgpack.core :refer [pack] :as msgpack]
+            [crow.request :refer [frame-decorder wrap-duplex-stream]]
             [clojure.core.async :refer [go-loop chan <! onto-chan thread]]
             [crow.service :as sv]
             [clojure.tools.logging :as log]
@@ -136,13 +135,24 @@
 
 (defn registrar-handler
   [registrar renewal-ms buffer-size stream info]
-  (let [source (->> stream
-                  (s/buffer buffer-size)
-                  (s/map read-message)
-                  (s/map (partial handle-request registrar renewal-ms))
-                  (s/map pack))]
-    (s/connect source stream)))
-
+  (let [source (buffer buffer-size stream)]
+    (d/loop []
+      (-> (s/take! source ::none)
+        (d/chain
+          (fn [msg]
+            (if (= msg ::none)
+              ::none
+              (d/future (handle-request registrar renewal-ms msg))))
+          (fn [msg']
+            (when-not (= msg' ::none)
+              (s/put! stream msg')))
+          (fn [result]
+            (when result
+              (d/recur))))
+        (d/catch
+          (fn [ex]
+            (log/error ex "An Error ocurred.")
+            (s/close! stream)))))))
 
 (defn start-registrar-service
   "Starting a registrar and wait requests.
@@ -152,12 +162,12 @@
   :renewal-ms  milliseconds for make each registered services expired. Services must send a 'lease' request before the expiration.
   :watch-internal  milliseconds for checking each service is expired or not."
   [{:keys [port name renewal-ms watch-interval buffer-size] :or {port 4000, renewal-ms default-renewal-ms, watch-interval default-watch-interval, buffer-size 10}}]
-  (let [registrar (new-registrar name renewal-ms watch-interval)
-        handler   (partial registrar-handler registrar renewal-ms buffer-size)]
+  (let [registrar (new-registrar name renewal-ms watch-interval)]
     (log/info (str "#### REGISTRAR SERVICE (name: " (pr-str name) " port: " port ") starts."))
     (process-registrar registrar)
     (tcp/start-server
-      handler
+      (fn [stream info]
+        (registrar-handler registrar renewal-ms buffer-size (wrap-duplex-stream stream) info))
       {:port port
        :pipeline-transform #(.addFirst % "framer" (frame-decorder))})))
 

@@ -18,7 +18,7 @@
   []
   (MessagePackFrameDecoder.
     (int Integer/MAX_VALUE) ;maxFrameLength
-    false)) ;fail-fast
+    false)) ;fail-fast 
 
 
 (defn unpack-message
@@ -116,4 +116,3 @@
           (d/finally
             (fn []
               (close! stream)))))))
-

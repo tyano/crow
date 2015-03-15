@@ -3,7 +3,7 @@
             [manifold.stream :refer [connect buffer] :as s]
             [manifold.deferred :refer [let-flow] :as d]
             [crow.protocol :refer [remote-call? invalid-message protocol-error call-result call-exception] :as p]
-            [crow.request :refer [frame-decorder wrap-duplex-stream]]
+            [crow.request :refer [frame-decorder wrap-duplex-stream] :as request]
             [crow.join-manager :refer [start-join-manager join]]
             [clojure.tools.logging :as log]
             [crow.logging :refer [trace-pr]]
@@ -76,7 +76,7 @@
   [service buffer-size stream info]
   (let [source (buffer buffer-size stream)]
     (d/loop []
-      (-> (s/take! source ::none)
+      (-> (s/try-take! source ::none request/*send-recv-timeout* ::none)
         (d/chain
           (fn [msg]
             (if (= msg ::none)
@@ -84,9 +84,9 @@
               (d/future (handle-request service msg))))
           (fn [msg']
             (when-not (= msg' ::none)
-              (s/put! stream msg')))
+              (s/try-put! stream msg' request/*send-recv-timeout* ::none)))
           (fn [result]
-            (when result
+            (when (and result (not= result ::none))
               (d/recur))))
         (d/catch
           (fn [ex]
@@ -130,4 +130,3 @@
                 :rejoin-interval-ms 10000}]
     (log/info (str "#### SERVICE (name: " service-name ", port: " port ") starts."))
     (start-service config)))
-

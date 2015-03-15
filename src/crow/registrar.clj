@@ -184,4 +184,3 @@
                               (throw (IllegalArgumentException. (str "Unknown option: " k))))))]
       (start-registrar-service
                 (merge {:port (Long/valueOf port-str), :name name} optmap)))))
-

@@ -3,7 +3,7 @@
             [manifold.stream :refer [connect buffer] :as s]
             [manifold.deferred :refer [let-flow] :as d]
             [crow.protocol :refer [remote-call? invalid-message protocol-error call-result call-exception] :as p]
-            [crow.request :refer [frame-decorder wrap-duplex-stream] :as request]
+            [crow.request :refer [frame-decorder wrap-duplex-stream format-stack-trace] :as request]
             [crow.join-manager :refer [start-join-manager join]]
             [clojure.tools.logging :as log]
             [crow.logging :refer [trace-pr]]
@@ -30,19 +30,6 @@
 (defn service-id
   [service]
   (deref (:service-id-ref service)))
-
-
-(defn- format-stack-trace
-  [exception]
-  (log/error exception "an error occured.")
-  (let [elements (cons (str (.getName (class exception)) ": " (.getMessage exception))
-                    (loop [^Throwable ex exception elems []]
-                      (if (nil? ex)
-                        elems
-                        (let [calls (-> (map str (.getStackTrace ex))
-                                        (as-> x (if (empty? elems) x (cons "Caused by:" x))))]
-                          (recur (.getCause ex) (apply conj elems calls))))))]
-    (apply str (map println-str elements))))
 
 (def ^:const error-namespace-is-not-public 400)
 (def ^:const error-target-not-found 401)
@@ -76,7 +63,7 @@
   [service buffer-size stream info]
   (let [source (buffer buffer-size stream)]
     (d/loop []
-      (-> (s/try-take! source ::none request/*send-recv-timeout* ::none)
+      (-> (s/take! source ::none)
         (d/chain
           (fn [msg]
             (if (= msg ::none)
@@ -84,13 +71,14 @@
               (d/future (handle-request service msg))))
           (fn [msg']
             (when-not (= msg' ::none)
-              (s/try-put! stream msg' request/*send-recv-timeout* ::none)))
+              (s/put! stream msg')))
           (fn [result]
-            (when (and result (not= result ::none))
+            (when result
               (d/recur))))
         (d/catch
           (fn [ex]
             (log/error ex "An Error ocurred.")
+            (s/put! stream (call-exception (format-stack-trace ex)))
             (s/close! stream)))))))
 
 (defn start-service

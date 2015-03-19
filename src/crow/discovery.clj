@@ -1,6 +1,6 @@
 (ns crow.discovery
   (:refer-clojure :exclude [send])
-  (:require [crow.protocol :refer [discovery service-found? service-not-found? ping ack?]]
+  (:require [crow.protocol :refer [discovery service-found? service-not-found? ping ack? call-exception?]]
             [crow.request :refer [send]]
             [crow.registrar-source :as source]
             [crow.service :as service]
@@ -81,6 +81,16 @@
                               (vec (:services msg)))
 
                            (service-not-found? msg)
+                           nil
+
+                           (call-exception? msg)
+                           (let [stack-trace (:stack-trace msg)]
+                             (throw (Exception. ^String stack-trace)))
+
+                           (= :crow.request/timeout msg)
+                           nil
+
+                           (= :crow.request/drained msg)
                            nil
 
                            :else

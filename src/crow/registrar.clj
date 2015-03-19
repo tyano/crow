@@ -5,16 +5,17 @@
             [clj-time.core :refer [now after? plus millis] :as t]
             [crow.protocol :refer [lease lease-expired registration invalid-message
                                    join-request? heart-beat? discovery? ping?
-                                   protocol-error ack
+                                   protocol-error ack call-exception
                                    service-found service-not-found] :as p]
-            [crow.request :refer [frame-decorder wrap-duplex-stream]]
+            [crow.request :refer [frame-decorder wrap-duplex-stream format-stack-trace]]
             [clojure.core.async :refer [go-loop chan <! onto-chan thread]]
             [crow.service :as sv]
             [clojure.tools.logging :as log]
             [crow.logging :refer [trace-pr debug-pr info-pr]]
             [byte-streams :refer [to-byte-array]]
             [clojure.set :refer [superset?]])
-  (:import [java.util UUID]))
+  (:import [java.util UUID])
+  (:gen-class))
 
 (def ^:const default-renewal-ms 10000)
 (def ^:const default-watch-interval 2000)
@@ -152,6 +153,7 @@
         (d/catch
           (fn [ex]
             (log/error ex "An Error ocurred.")
+            (s/put! stream (call-exception (format-stack-trace ex)))
             (s/close! stream)))))))
 
 (defn start-registrar-service

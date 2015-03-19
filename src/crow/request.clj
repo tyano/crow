@@ -18,8 +18,18 @@
   []
   (MessagePackFrameDecoder.
     (int Integer/MAX_VALUE) ;maxFrameLength
-    false)) ;fail-fast 
+    false)) ;fail-fast
 
+(defn format-stack-trace
+  [exception]
+  (let [elements (cons (str (.getName (class exception)) ": " (.getMessage exception))
+                    (loop [^Throwable ex exception elems []]
+                      (if (nil? ex)
+                        elems
+                        (let [calls (-> (map str (.getStackTrace ex))
+                                        (as-> x (if (empty? elems) x (cons "Caused by:" x))))]
+                          (recur (.getCause ex) (apply conj elems calls))))))]
+    (apply str (map println-str elements))))
 
 (defn unpack-message
   [data]
@@ -76,11 +86,13 @@
   (chain (tcp/client {:host address,
                       :port port,
                       :pipeline-transform #(.addFirst % "framer" (frame-decorder))})
-    wrap-duplex-stream
+    #(wrap-duplex-stream %)
     (fn [stream]
+      (log/trace "sending...")
       (-> (send! stream req)
           (chain
             (fn [sent]
+              (log/trace "sent!")
               (case sent
                 false
                 (do
@@ -94,6 +106,7 @@
 
                 (recv! stream)))
             (fn [msg]
+              (log/trace "receive!")
               (case msg
                 false
                 false
@@ -106,7 +119,7 @@
                 ::drained
                 (do
                   (log/error (str "Drained: Peer closed: req: " (pr-str req)))
-                  nil)
+                  ::drained)
 
                 msg)))
           (d/catch

@@ -3,7 +3,7 @@
   (:require [crow.protocol :refer [remote-call call-result? call-exception?]]
             [crow.request :refer [send] :as request]
             [manifold.deferred :refer [chain] :as d]
-            [clojure.core.async :refer [>!! chan <!! close! alts!! timeout]]
+            [clojure.core.async :refer [>!! chan <!! close! alts!! timeout thread]]
             [crow.discovery :refer [discover service-finder]]
             [crow.logging :refer [debug-pr]]
             [clojure.tools.logging :as log]
@@ -13,49 +13,44 @@
 
 (defn invoke
   [{:keys [address port] :as service} target-ns fn-name & args]
-  (let [ch  (chan)
-        msg (remote-call target-ns fn-name args)]
-    (d/loop [retry-count 3 timeout-ms request/*send-recv-timeout*]
-      (if (= retry-count 0)
-        (>!! ch (IllegalStateException. "retry timeout!!"))
-        (binding [request/*send-recv-timeout* timeout-ms]
-          (-> (send address port msg)
-              (chain
-                (fn [msg]
-                  (cond
-                    (false? msg) ; Could'nt send. retry
-                    (do
-                      (Thread/sleep *retry-interval*)
-                      (log/debug (str "RETRY! - remaining retry count : " (dec retry-count)))
-                      (d/recur (dec retry-count) timeout-ms))
+  (let [msg (remote-call target-ns fn-name args)]
+    (thread
+      (try
+        @(d/loop [retry-count 3 timeout-ms request/*send-recv-timeout*]
+          (if (= retry-count 0)
+            (throw (IllegalStateException. "retry timeout!!"))
+            (binding [request/*send-recv-timeout* timeout-ms]
+              (-> (send address port msg)
+                  (chain
+                    (fn [msg]
+                      (cond
+                        (false? msg) ; Could'nt send. retry
+                        (do
+                          (Thread/sleep *retry-interval*)
+                          (log/debug (str "RETRY! - remaining retry count : " (dec retry-count)))
+                          (d/recur (dec retry-count) timeout-ms))
 
-                    (call-exception? msg)
-                    (let [stack-trace (:stack-trace msg)]
-                      (>!! ch (Exception. ^String stack-trace)))
+                        (call-exception? msg)
+                        (let [stack-trace (:stack-trace msg)]
+                          (throw (Exception. ^String stack-trace)))
 
-                    (call-result? msg)
-                    (if-some [result (:obj msg)]
-                      (>!! ch result)
-                      (>!! ch ::nil))
+                        (call-result? msg)
+                        (:obj msg)
 
-                    :crow.request/timeout
-                    (do
-                      (Thread/sleep *retry-interval*)
-                      (log/debug (str "RETRY! - remaining retry count : " (dec retry-count)))
-                      (d/recur (dec retry-count) timeout-ms))
+                        :crow.request/timeout
+                        (do
+                          (Thread/sleep *retry-interval*)
+                          (log/debug (str "RETRY! - remaining retry count : " (dec retry-count)))
+                          (d/recur (dec retry-count) timeout-ms))
 
-                    :crow.request/drained
-                    (do
-                      (log/debug "DRAINED!")
-                      (>!! ch ::nil))
+                        :crow.request/drained
+                        (do
+                          (log/debug "DRAINED!")
+                          nil)
 
-                    :else
-                    (>!! ch (IllegalStateException. (str "No such message format: " (pr-str msg)))))))
-              (d/catch
-                #(>!! ch %))
-              (d/finally
-                #(close! ch))))))
-    ch))
+                        :else
+                        (throw (IllegalStateException. (str "No such message format: " (pr-str msg)))))))))))
+        (catch Throwable th th)))))
 
 (def ^:dynamic *default-finder*)
 
@@ -132,22 +127,13 @@
   (when ch
     ;; if no data is supplied to ch until 4* msecs of *send-receive-timeout*,
     ;; it should be a bug... (because invoke will retry only 3 times)
-    (try
-      (let [timeout-ch (timeout (+ (* request/*send-recv-timeout* 4) (* *retry-interval* 4)))
-            [result c] (alts!! [ch timeout-ch])]
-        (if (= c timeout-ch)
-          (throw+ {:type :channel-read-timeout})
-          (cond
-            (instance? Throwable result)
-            (throw result)
-
-            (= result ::nil)
-            nil
-
-            :else
-            result)))
-      (finally
-        (close! ch)))))
+    (let [timeout-ch (timeout (+ (* request/*send-recv-timeout* 4) (* *retry-interval* 4)))
+          [result c] (alts!! [ch timeout-ch])]
+      (if (= c timeout-ch)
+        (throw+ {:type :channel-read-timeout})
+        (if (instance? Throwable result)
+          (throw result)
+          result)))))
 
 
 (defmacro call

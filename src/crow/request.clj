@@ -1,17 +1,16 @@
 (ns crow.request
   (:refer-clojure :exclude [send])
   (:require [aleph.tcp :as tcp]
+            [msgpack.core :as msgpack]
             [manifold.stream :refer [try-put! try-take! close!] :as s]
             [manifold.deferred :refer [let-flow chain] :as d]
             [msgpack.core :refer [pack unpack] :as msgpack]
-            [msgpack.io :refer [ubytes int->bytes]]
             [clojure.tools.logging :as log]
             [crow.logging :refer [trace-pr]]
             [crow.protocol :refer [restore-ext]]
             [byte-streams :refer [to-byte-array]]
             [clojure.tools.logging :as log])
-  (:import [msgpack.core Extension]
-           [com.shelf.messagepack MessagePackFrameDecoder]))
+  (:import [com.shelf.messagepack MessagePackFrameDecoder]))
 
 
 (defn frame-decorder
@@ -34,9 +33,7 @@
 (defn unpack-message
   [data]
   (let [msg (unpack data)]
-    (if (instance? Extension msg)
-      (restore-ext msg)
-      msg)))
+    (restore-ext msg)))
 
 (def ^:dynamic *send-recv-timeout* 2000)
 

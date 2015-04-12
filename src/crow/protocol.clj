@@ -1,11 +1,13 @@
 (ns crow.protocol
   (:refer-clojure :exclude [second])
-  (:require [msgpack.core :refer [defext pack unpack] :as msgpack]
-            [msgpack.io :refer [ubytes byte-stream next-int next-byte int->bytes byte->bytes] :as io]
+  (:require [msgpack.core :refer [pack unpack] :as msgpack]
+            [msgpack.macros :refer [defext]]
             [clj-time.core :refer [year month day hour minute second date-time]]
             [clojure.edn :as edn]
             [crow.marshaller :refer [marshal unmarshal ->EdnObjectMarshaller]]
-            [clojure.tools.logging :as log]))
+            [clojure.tools.logging :as log])
+  (:import [java.io ByteArrayOutputStream ByteArrayInputStream
+                    DataOutputStream DataInputStream]))
 
 (def ^:const separator 0x00)
 (def ^:const type-join-request    1)
@@ -32,25 +34,41 @@
   "devide an DateTime object of clj-time into year, month, day, hour, minute and seconds,
   convert each element intto byte-arrays, and then combine them into one byte-array."
   [t]
-  (let [year-bytes   (int->bytes  (year t))
-        month-bytes  (byte->bytes (month t))
-        day-bytes    (byte->bytes (day t))
-        hour-bytes   (byte->bytes (hour t))
-        minute-bytes (byte->bytes (minute t))
-        second-bytes (byte->bytes (second t))]
-    (ubytes (concat year-bytes month-bytes day-bytes hour-bytes minute-bytes second-bytes))))
+  (with-open [s (DataOutputStream. (ByteArrayOutputStream.))]
+    (.writeInt s (year t))
+    (.writeByte s (month t))
+    (.writeByte s (day t))
+    (.writeByte s (hour t))
+    (.writeByte s (minute t))
+    (.writeByte s (second t))
+    (.toByteArray s)))
+    ; (let [year-bytes   (int->bytes  (year t))
+    ;       month-bytes  (byte->bytes (month t))
+    ;       day-bytes    (byte->bytes (day t))
+    ;       hour-bytes   (byte->bytes (hour t))
+    ;       minute-bytes (byte->bytes (minute t))
+    ;       second-bytes (byte->bytes (second t))]
+    ;   (ubytes (concat year-bytes month-bytes day-bytes hour-bytes minute-bytes second-bytes)))))
 
 (defn bytes->date
   "restore a DateTime object from an byte-array created by date->bytes."
   [data]
-  (let [stream      (byte-stream data)
-        year-int    (next-int stream)
-        month-byte  (next-byte stream)
-        day-byte    (next-byte stream)
-        hour-byte   (next-byte stream)
-        minute-byte (next-byte stream)
-        second-byte (next-byte stream)]
-    (date-time year-int month-byte day-byte hour-byte minute-byte second-byte)))
+  (with-open [s (DataInputStream. (ByteArrayInputStream. data))]
+    (let [year-int    (.readInt s)
+          month-byte  (.readByte s)
+          day-byte    (.readByte s)
+          hour-byte   (.readByte s)
+          minute-byte (.readByte s)
+          second-byte (.readByte s)]
+      (date-time year-int month-byte day-byte hour-byte minute-byte second-byte))))
+  ; (let [stream      (byte-stream data)
+  ;       year-int    (next-int stream)
+  ;       month-byte  (next-byte stream)
+  ;       day-byte    (next-byte stream)
+  ;       hour-byte   (next-byte stream)
+  ;       minute-byte (next-byte stream)
+  ;       second-byte (next-byte stream)]
+  ;   (date-time year-int month-byte day-byte hour-byte minute-byte second-byte)))
 
 
 (defmulti restore-ext
@@ -65,8 +83,9 @@
 
 (defrecord JoinRequest [address port service-id service-name attributes])
 
-(defext JoinRequest type-join-request [ent]
-  (pack [(:address ent) (:port ent) (:service-id ent) (:service-name ent) (pr-str (:attributes ent))]))
+(defext JoinRequest type-join-request
+  (fn [ent]
+    (pack [(:address ent) (:port ent) (:service-id ent) (:service-name ent) (pr-str (:attributes ent))])))
 
 (defmethod restore-ext type-join-request
   [ext]
@@ -87,8 +106,9 @@
 
 (defrecord Registration [^String service-id expire-at])
 
-(defext Registration type-registration [ent]
-  (pack [(:service-id ent) (date->bytes (:expire-at ent))]))
+(defext Registration type-registration
+  (fn [ent]
+    (pack [(:service-id ent) (date->bytes (:expire-at ent))])))
 
 (defmethod restore-ext type-registration
   [ext]
@@ -102,8 +122,9 @@
 
 (defrecord HeartBeat [^String service-id])
 
-(defext HeartBeat type-heart-beat [ent]
-  (pack (:service-id ent)))
+(defext HeartBeat type-heart-beat
+  (fn [ent]
+    (pack (:service-id ent))))
 
 (defmethod restore-ext type-heart-beat
   [ext]
@@ -116,8 +137,9 @@
 
 (defrecord Lease [expire-at])
 
-(defext Lease type-lease [ent]
-  (pack (date->bytes (:expire-at ent))))
+(defext Lease type-lease
+  (fn [ent]
+    (pack (date->bytes (:expire-at ent)))))
 
 (defmethod restore-ext type-lease
   [ext]
@@ -131,8 +153,9 @@
 
 (defrecord LeaseExpired [service-id])
 
-(defext LeaseExpired type-lease-expired [ent]
-  (pack (:service-id ent)))
+(defext LeaseExpired type-lease-expired
+  (fn [ent]
+    (pack (:service-id ent))))
 
 (defmethod restore-ext type-lease-expired
   [ext]
@@ -145,8 +168,9 @@
 
 (defrecord InvalidMessage [msg])
 
-(defext InvalidMessage type-invalid-message [ent]
-  (pack (:msg ent)))
+(defext InvalidMessage type-invalid-message
+  (fn [ent]
+    (pack (:msg ent))))
 
 (defmethod restore-ext type-invalid-message
   [ext]
@@ -159,8 +183,9 @@
 
 (defrecord RemoteCall [target-ns fn-name args])
 
-(defext RemoteCall type-remote-call [ent]
-  (pack [(:target-ns ent) (:fn-name ent) (map (partial marshal *object-marshaller*) (:args ent))]))
+(defext RemoteCall type-remote-call
+  (fn [ent]
+    (pack [(:target-ns ent) (:fn-name ent) (map (partial marshal *object-marshaller*) (:args ent))])))
 
 (defmethod restore-ext type-remote-call
   [ext]
@@ -176,8 +201,9 @@
 
 (defrecord CallResult [obj])
 
-(defext CallResult type-call-result [ent]
-  (pack (marshal *object-marshaller* (:obj ent))))
+(defext CallResult type-call-result
+  (fn [ent]
+    (pack (marshal *object-marshaller* (:obj ent)))))
 
 (defmethod restore-ext type-call-result
   [ext]
@@ -193,8 +219,9 @@
 
 (defrecord CallException [stack-trace])
 
-(defext CallException type-call-exception [ent]
-  (pack ^String (:stack-trace ent)))
+(defext CallException type-call-exception
+  (fn [ent]
+    (pack ^String (:stack-trace ent))))
 
 (defmethod restore-ext type-call-exception
   [ext]
@@ -210,8 +237,9 @@
 
 (defrecord ProtocolError [error-code message])
 
-(defext ProtocolError type-protocol-error [ent]
-  (pack [(:error-code ent) (:message ent)]))
+(defext ProtocolError type-protocol-error
+  (fn [ent]
+    (pack [(:error-code ent) (:message ent)])))
 
 (defmethod restore-ext type-protocol-error
   [ext]
@@ -226,8 +254,9 @@
 
 (defrecord Discovery [service-name attributes])
 
-(defext Discovery type-discovery [ent]
-  (pack [(:service-name ent) (pr-str (:attributes ent))]))
+(defext Discovery type-discovery
+  (fn [ent]
+    (pack [(:service-name ent) (pr-str (:attributes ent))])))
 
 (defmethod restore-ext type-discovery
   [ext]
@@ -249,8 +278,9 @@
 ;;; :address :port :service-name :attributes
 (defrecord ServiceFound [services])
 
-(defext ServiceFound type-service-found [ent]
-  (pack (vec (mapcat #(vector (:address %) (:port %) (:service-name %) (pr-str (:attributes %))) (:services ent)))))
+(defext ServiceFound type-service-found
+  (fn [ent]
+    (pack (vec (mapcat #(vector (:address %) (:port %) (:service-name %) (pr-str (:attributes %))) (:services ent))))))
 
 (defmethod restore-ext type-service-found
   [ext]
@@ -276,8 +306,9 @@
 
 (defrecord ServiceNotFound [service-name attributes])
 
-(defext ServiceNotFound type-service-not-found [ent]
-  (pack [(:service-name ent) (pr-str (:attributes ent))]))
+(defext ServiceNotFound type-service-not-found
+  (fn [ent]
+    (pack [(:service-name ent) (pr-str (:attributes ent))])))
 
 (defmethod restore-ext type-service-not-found
   [ext]

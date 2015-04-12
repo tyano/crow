@@ -34,14 +34,16 @@
   "devide an DateTime object of clj-time into year, month, day, hour, minute and seconds,
   convert each element intto byte-arrays, and then combine them into one byte-array."
   [t]
-  (with-open [s (DataOutputStream. (ByteArrayOutputStream.))]
+  (with-open [bytearray (ByteArrayOutputStream.)
+              s (DataOutputStream. bytearray)]
     (.writeInt s (year t))
     (.writeByte s (month t))
     (.writeByte s (day t))
     (.writeByte s (hour t))
     (.writeByte s (minute t))
     (.writeByte s (second t))
-    (.toByteArray s)))
+    (.flush s)
+    (.toByteArray bytearray)))
     ; (let [year-bytes   (int->bytes  (year t))
     ;       month-bytes  (byte->bytes (month t))
     ;       day-bytes    (byte->bytes (day t))

@@ -1,6 +1,6 @@
 (ns crow.protocol
   (:refer-clojure :exclude [second])
-  (:require [msgpack.core :refer [pack unpack] :as msgpack]
+  (:require [msgpack.core :refer [unpack] :as msgpack]
             [msgpack.macros :refer [defext]]
             [clj-time.core :refer [year month day hour minute second date-time]]
             [clojure.edn :as edn]
@@ -25,6 +25,11 @@
 (def ^:const type-service-not-found  13)
 
 (def ^:dynamic *object-marshaller* (->EdnObjectMarshaller))
+
+(defn pack
+  [data]
+  (when data
+    (into-array Byte/TYPE (msgpack/pack data))))
 
 (defn install-default-marshaller
   [marshaller]

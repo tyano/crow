@@ -4,10 +4,10 @@
             [msgpack.core :as msgpack]
             [manifold.stream :refer [try-put! try-take! close!] :as s]
             [manifold.deferred :refer [let-flow chain] :as d]
-            [msgpack.core :refer [pack unpack] :as msgpack]
+            [msgpack.core :refer [unpack] :as msgpack]
             [clojure.tools.logging :as log]
             [crow.logging :refer [trace-pr]]
-            [crow.protocol :refer [restore-ext]]
+            [crow.protocol :refer [restore-ext pack]]
             [byte-streams :refer [to-byte-array]]
             [clojure.tools.logging :as log])
   (:import [com.shelf.messagepack MessagePackFrameDecoder]))

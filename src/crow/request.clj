@@ -10,7 +10,8 @@
             [crow.protocol :refer [restore-ext pack]]
             [byte-streams :refer [to-byte-array]]
             [clojure.tools.logging :as log])
-  (:import [com.shelf.messagepack MessagePackFrameDecoder]))
+  (:import [com.shelf.messagepack MessagePackFrameDecoder]
+           [msgpack.core Extended]))
 
 
 (defn frame-decorder
@@ -33,7 +34,9 @@
 (defn unpack-message
   [data]
   (let [msg (unpack data)]
-    (restore-ext msg)))
+    (if (instance? Extended msg)
+      (restore-ext msg)
+      msg)))
 
 (def ^:dynamic *send-recv-timeout* 2000)
 

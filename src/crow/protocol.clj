@@ -28,8 +28,7 @@
 
 (defn pack
   [data]
-  (when data
-    (into-array Byte/TYPE (msgpack/pack data))))
+  (into-array Byte/TYPE (msgpack/pack data)))
 
 (defn install-default-marshaller
   [marshaller]
@@ -49,13 +48,6 @@
     (.writeByte s (second t))
     (.flush s)
     (.toByteArray bytearray)))
-    ; (let [year-bytes   (int->bytes  (year t))
-    ;       month-bytes  (byte->bytes (month t))
-    ;       day-bytes    (byte->bytes (day t))
-    ;       hour-bytes   (byte->bytes (hour t))
-    ;       minute-bytes (byte->bytes (minute t))
-    ;       second-bytes (byte->bytes (second t))]
-    ;   (ubytes (concat year-bytes month-bytes day-bytes hour-bytes minute-bytes second-bytes)))))
 
 (defn bytes->date
   "restore a DateTime object from an byte-array created by date->bytes."
@@ -68,21 +60,12 @@
           minute-byte (.readByte s)
           second-byte (.readByte s)]
       (date-time year-int month-byte day-byte hour-byte minute-byte second-byte))))
-  ; (let [stream      (byte-stream data)
-  ;       year-int    (next-int stream)
-  ;       month-byte  (next-byte stream)
-  ;       day-byte    (next-byte stream)
-  ;       hour-byte   (next-byte stream)
-  ;       minute-byte (next-byte stream)
-  ;       second-byte (next-byte stream)]
-  ;   (date-time year-int month-byte day-byte hour-byte minute-byte second-byte)))
-
 
 (defmulti restore-ext
-  "restore an original record from an Extention record.
-  This fn uses the type of Extention for identify the original record.
-  If you create a new Extention type and a record for the Extention,
-  you must create a new defmethod for the type of Extention."
+  "restore an original record from an Extended record.
+  This fn uses the type of Extended for identify the original record.
+  If you create a new Extended type and a record for the Extended,
+  you must create a new defmethod for the type of Extended."
   (fn [ext] (:type ext)))
 
 (defmethod restore-ext :default [ext] ext)

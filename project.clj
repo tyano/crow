@@ -12,6 +12,7 @@
                  [slingshot "0.12.1"]
                  [com.shelf/messagepack-framedecoder "1.0-SNAPSHOT"]]
   :plugins [[lein-midje "3.1.3"]]
+  :repositories {"javelindev-snapshots" "http://javelindev.jp/repository/snapshots"}
   :profiles {:dev {:dependencies [[midje "1.6.3"]
                                   [ch.qos.logback/logback-classic "1.1.2"]]
                    :resource-paths ["resources-dev"]

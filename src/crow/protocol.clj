@@ -1,6 +1,6 @@
 (ns crow.protocol
   (:refer-clojure :exclude [second])
-  (:require [msgpack.core :refer [unpack] :as msgpack]
+  (:require [msgpack.core :refer [unpack unpack-stream] :as msgpack]
             [msgpack.macros :refer [defext]]
             [clj-time.core :refer [year month day hour minute second date-time]]
             [clojure.edn :as edn]
@@ -61,6 +61,26 @@
           second-byte (.readByte s)]
       (date-time year-int month-byte day-byte hour-byte minute-byte second-byte))))
 
+(defn combine-bytes
+  [& bytes-coll]
+  (when (seq bytes-coll)
+    (with-open [bytearray (ByteArrayOutputStream.)
+                s (DataOutputStream. bytearray)]
+      (doseq [barray bytes-coll]
+        (.write s ^bytes barray (int 0) (int (count barray))))
+      (.flush s)
+      (.toByteArray bytearray))))
+
+(defn pack-and-combine
+  [& packable-coll]
+  (when (seq packable-coll)
+    (apply combine-bytes (map pack packable-coll))))
+
+(defn unpack-n
+  [n data]
+  (with-open [s (DataInputStream. (ByteArrayInputStream. (byte-array data)))]
+    (for [_ (range n)] (unpack-stream s))))
+
 (defmulti restore-ext
   "restore an original record from an Extended record.
   This fn uses the type of Extended for identify the original record.
@@ -75,12 +95,12 @@
 
 (defext JoinRequest type-join-request
   (fn [ent]
-    (pack [(:address ent) (:port ent) (:service-id ent) (:service-name ent) (pr-str (:attributes ent))])))
+    (pack-and-combine (:address ent) (:port ent) (:service-id ent) (:service-name ent) (pr-str (:attributes ent)))))
 
 (defmethod restore-ext type-join-request
   [ext]
   (let [data ^bytes (:data ext)
-        [address port service-id service-name attributes-edn] (unpack data)]
+        [address port service-id service-name attributes-edn] (unpack-n 5 data)]
     (try
       (let [attributes (edn/read-string attributes-edn)]
         (JoinRequest. address port service-id service-name attributes))
@@ -98,12 +118,12 @@
 
 (defext Registration type-registration
   (fn [ent]
-    (pack [(:service-id ent) (date->bytes (:expire-at ent))])))
+    (pack-and-combine (:service-id ent) (date->bytes (:expire-at ent)))))
 
 (defmethod restore-ext type-registration
   [ext]
   (let [data ^bytes (:data ext)
-        [service-id date-bytes] (unpack data)
+        [service-id date-bytes] (unpack-n 2 data)
         expire-at (bytes->date date-bytes)]
     (Registration. service-id expire-at)))
 
@@ -175,12 +195,12 @@
 
 (defext RemoteCall type-remote-call
   (fn [ent]
-    (pack [(:target-ns ent) (:fn-name ent) (map (partial marshal *object-marshaller*) (:args ent))])))
+    (pack-and-combine (:target-ns ent) (:fn-name ent) (map (partial marshal *object-marshaller*) (:args ent)))))
 
 (defmethod restore-ext type-remote-call
   [ext]
   (let [data ^bytes (:data ext)
-        [target-ns fn-name args] (unpack data)
+        [target-ns fn-name args] (unpack-n 3 data)
         args (map (partial unmarshal *object-marshaller*) args)]
     (RemoteCall. target-ns fn-name args)))
 
@@ -229,12 +249,12 @@
 
 (defext ProtocolError type-protocol-error
   (fn [ent]
-    (pack [(:error-code ent) (:message ent)])))
+    (pack-and-combine (:error-code ent) (:message ent))))
 
 (defmethod restore-ext type-protocol-error
   [ext]
   (let [data ^bytes (:data ext)
-        [error-code message] (unpack data)]
+        [error-code message] (unpack-n 2 data)]
     (ProtocolError. error-code message)))
 
 (defn protocol-error
@@ -246,12 +266,12 @@
 
 (defext Discovery type-discovery
   (fn [ent]
-    (pack [(:service-name ent) (pr-str (:attributes ent))])))
+    (pack-and-combine (:service-name ent) (pr-str (:attributes ent)))))
 
 (defmethod restore-ext type-discovery
   [ext]
   (let [data ^bytes (:data ext)
-        [service-name attr-edn] (unpack data)]
+        [service-name attr-edn] (unpack-n 2 data)]
     (try
       (let [attributes (edn/read-string attr-edn)]
         (Discovery. service-name attributes))
@@ -298,12 +318,12 @@
 
 (defext ServiceNotFound type-service-not-found
   (fn [ent]
-    (pack [(:service-name ent) (pr-str (:attributes ent))])))
+    (pack-and-combine (:service-name ent) (pr-str (:attributes ent)))))
 
 (defmethod restore-ext type-service-not-found
   [ext]
   (let [data ^bytes (:data ext)
-        [service-name attr-edn] (unpack data)]
+        [service-name attr-edn] (unpack-n 2 data)]
     (try
       (let [attributes (edn/read-string attr-edn)]
         (ServiceNotFound. service-name attributes))

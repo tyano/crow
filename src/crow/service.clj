@@ -51,6 +51,7 @@
             (let [r (apply target-fn args)]
               (call-result r))
             (catch Throwable th
+              (log/error th "An error occurred in a function.")
               (call-exception (format-stack-trace th))))))))
 
 (defn- handle-request

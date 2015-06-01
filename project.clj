@@ -17,7 +17,11 @@
                                   [ch.qos.logback/logback-classic "1.1.2"]]
                    :resource-paths ["resources-dev"]
                    :jvm-opts ["-Djava.net.preferIPv4Stack=true"]}}
-  :aot [crow.registrar-source crow.registrar crow.protocol crow.discovery]
+  :aot [crow.registrar-source
+        crow.registrar
+        crow.protocol
+        crow.discovery
+        crow.marshaller]
   :main crow.registrar)
 
 (cemerick.pomegranate.aether/register-wagon-factory!

@@ -1,7 +1,7 @@
 (ns crow.protocol
   (:refer-clojure :exclude [second])
-  (:require [msgpack.core :refer [unpack unpack-stream] :as msgpack]
-            [msgpack.macros :refer [defext]]
+  (:require [msgpack.core :refer [pack unpack unpack-stream] :as msgpack]
+            [msgpack.macros :refer [extend-msgpack]]
             [clj-time.core :refer [year month day hour minute second date-time]]
             [clojure.edn :as edn]
             [crow.marshaller :refer [marshal unmarshal ->EdnObjectMarshaller]]
@@ -25,10 +25,6 @@
 (def ^:const type-service-not-found  13)
 
 (def ^:dynamic *object-marshaller* (->EdnObjectMarshaller))
-
-(defn pack
-  [data]
-  (into-array Byte/TYPE (msgpack/pack data)))
 
 (defn install-default-marshaller
   [marshaller]
@@ -81,26 +77,14 @@
   (with-open [s (DataInputStream. (ByteArrayInputStream. (byte-array data)))]
     (for [_ (range n)] (unpack-stream s))))
 
-(defmulti restore-ext
-  "restore an original record from an Extended record.
-  This fn uses the type of Extended for identify the original record.
-  If you create a new Extended type and a record for the Extended,
-  you must create a new defmethod for the type of Extended."
-  (fn [ext] (:type ext)))
-
-(defmethod restore-ext :default [ext] ext)
-
 
 (defrecord JoinRequest [address port service-id service-name attributes])
 
-(defext JoinRequest type-join-request
-  (fn [ent]
-    (pack-and-combine (:address ent) (:port ent) (:service-id ent) (:service-name ent) (pr-str (:attributes ent)))))
-
-(defmethod restore-ext type-join-request
-  [ext]
-  (let [data ^bytes (:data ext)
-        [address port service-id service-name attributes-edn] (unpack-n 5 data)]
+(extend-msgpack JoinRequest type-join-request
+  [ent]
+  (pack-and-combine (:address ent) (:port ent) (:service-id ent) (:service-name ent) (pr-str (:attributes ent)))
+  [data]
+  (let [[address port service-id service-name attributes-edn] (unpack-n 5 data)]
     (try
       (let [attributes (edn/read-string attributes-edn)]
         (JoinRequest. address port service-id service-name attributes))
@@ -116,14 +100,11 @@
 
 (defrecord Registration [^String service-id expire-at])
 
-(defext Registration type-registration
-  (fn [ent]
-    (pack-and-combine (:service-id ent) (date->bytes (:expire-at ent)))))
-
-(defmethod restore-ext type-registration
-  [ext]
-  (let [data ^bytes (:data ext)
-        [service-id date-bytes] (unpack-n 2 data)
+(extend-msgpack Registration type-registration
+  [ent]
+  (pack-and-combine (:service-id ent) (date->bytes (:expire-at ent)))
+  [data]
+  (let [[service-id date-bytes] (unpack-n 2 data)
         expire-at (bytes->date date-bytes)]
     (Registration. service-id expire-at)))
 
@@ -132,29 +113,22 @@
 
 (defrecord HeartBeat [^String service-id])
 
-(defext HeartBeat type-heart-beat
-  (fn [ent]
-    (pack (:service-id ent))))
-
-(defmethod restore-ext type-heart-beat
-  [ext]
-  (let [data ^bytes (:data ext)
-        service-id (unpack data)]
-    (HeartBeat. service-id)))
+(extend-msgpack HeartBeat type-heart-beat
+  [ent]
+  (pack (:service-id ent))
+  [data]
+  (HeartBeat. (unpack data)))
 
 (defn heart-beat [service-id] (HeartBeat. service-id))
 
 
 (defrecord Lease [expire-at])
 
-(defext Lease type-lease
-  (fn [ent]
-    (pack (date->bytes (:expire-at ent)))))
-
-(defmethod restore-ext type-lease
-  [ext]
-  (let [data ^bytes (:data ext)
-        expire-at   (-> (unpack data) (bytes->date))]
+(extend-msgpack Lease type-lease
+  [ent]
+  (pack (date->bytes (:expire-at ent)))
+  [data]
+  (let [expire-at   (-> (unpack data) (bytes->date))]
     (Lease. expire-at)))
 
 (defn lease [expire-at] (Lease. expire-at))
@@ -163,29 +137,22 @@
 
 (defrecord LeaseExpired [service-id])
 
-(defext LeaseExpired type-lease-expired
-  (fn [ent]
-    (pack (:service-id ent))))
-
-(defmethod restore-ext type-lease-expired
-  [ext]
-  (let [data ^bytes (:data ext)
-        service-id (unpack data)]
-    (LeaseExpired. service-id)))
+(extend-msgpack LeaseExpired type-lease-expired
+  [ent]
+  (pack (:service-id ent))
+  [data]
+  (LeaseExpired. (unpack data)))
 
 (defn lease-expired [service-id] (LeaseExpired. service-id))
 
 
 (defrecord InvalidMessage [msg])
 
-(defext InvalidMessage type-invalid-message
-  (fn [ent]
-    (pack (:msg ent))))
-
-(defmethod restore-ext type-invalid-message
-  [ext]
-  (let [data ^bytes (:data ext)]
-    (InvalidMessage. (unpack data))))
+(extend-msgpack InvalidMessage type-invalid-message
+  [ent]
+  (pack (:msg ent))
+  [data]
+  (InvalidMessage. (unpack data)))
 
 (defn invalid-message [msg] (InvalidMessage. msg))
 
@@ -193,14 +160,11 @@
 
 (defrecord RemoteCall [target-ns fn-name args])
 
-(defext RemoteCall type-remote-call
-  (fn [ent]
-    (pack-and-combine (:target-ns ent) (:fn-name ent) (map (partial marshal *object-marshaller*) (:args ent)))))
-
-(defmethod restore-ext type-remote-call
-  [ext]
-  (let [data ^bytes (:data ext)
-        [target-ns fn-name args] (unpack-n 3 data)
+(extend-msgpack RemoteCall type-remote-call
+  [ent]
+  (pack-and-combine (:target-ns ent) (:fn-name ent) (map (partial marshal *object-marshaller*) (:args ent)))
+  [data]
+  (let [[target-ns fn-name args] (unpack-n 3 data)
         args (map (partial unmarshal *object-marshaller*) args)]
     (RemoteCall. target-ns fn-name args)))
 
@@ -211,14 +175,11 @@
 
 (defrecord CallResult [obj])
 
-(defext CallResult type-call-result
-  (fn [ent]
-    (pack (marshal *object-marshaller* (:obj ent)))))
-
-(defmethod restore-ext type-call-result
-  [ext]
-  (let [data ^bytes (:data ext)
-        obj-marshalled (unpack data)
+(extend-msgpack CallResult type-call-result
+  [ent]
+  (pack (marshal *object-marshaller* (:obj ent)))
+  [data]
+  (let [obj-marshalled (unpack data)
         obj (unmarshal *object-marshaller* obj-marshalled)]
     (CallResult. obj)))
 
@@ -229,15 +190,11 @@
 
 (defrecord CallException [stack-trace])
 
-(defext CallException type-call-exception
-  (fn [ent]
-    (pack ^String (:stack-trace ent))))
-
-(defmethod restore-ext type-call-exception
-  [ext]
-  (let [data ^bytes (:data ext)
-        stack-trace (unpack data)]
-    (CallException. stack-trace)))
+(extend-msgpack CallException type-call-exception
+  [ent]
+  (pack ^String (:stack-trace ent))
+  [data]
+  (CallException. (unpack data)))
 
 (defn call-exception
   [stack-trace]
@@ -247,14 +204,11 @@
 
 (defrecord ProtocolError [error-code message])
 
-(defext ProtocolError type-protocol-error
-  (fn [ent]
-    (pack-and-combine (:error-code ent) (:message ent))))
-
-(defmethod restore-ext type-protocol-error
-  [ext]
-  (let [data ^bytes (:data ext)
-        [error-code message] (unpack-n 2 data)]
+(extend-msgpack ProtocolError type-protocol-error
+  [ent]
+  (pack-and-combine (:error-code ent) (:message ent))
+  [data]
+  (let [[error-code message] (unpack-n 2 data)]
     (ProtocolError. error-code message)))
 
 (defn protocol-error
@@ -264,14 +218,11 @@
 
 (defrecord Discovery [service-name attributes])
 
-(defext Discovery type-discovery
-  (fn [ent]
-    (pack-and-combine (:service-name ent) (pr-str (:attributes ent)))))
-
-(defmethod restore-ext type-discovery
-  [ext]
-  (let [data ^bytes (:data ext)
-        [service-name attr-edn] (unpack-n 2 data)]
+(extend-msgpack Discovery type-discovery
+  [ent]
+  (pack-and-combine (:service-name ent) (pr-str (:attributes ent)))
+  [data]
+  (let [[service-name attr-edn] (unpack-n 2 data)]
     (try
       (let [attributes (edn/read-string attr-edn)]
         (Discovery. service-name attributes))
@@ -288,14 +239,11 @@
 ;;; :address :port :service-name :attributes
 (defrecord ServiceFound [services])
 
-(defext ServiceFound type-service-found
-  (fn [ent]
-    (pack (vec (mapcat #(vector (:address %) (:port %) (:service-name %) (pr-str (:attributes %))) (:services ent))))))
-
-(defmethod restore-ext type-service-found
-  [ext]
-  (let [data ^bytes (:data ext)
-        service-data-coll (partition 4 (unpack data))
+(extend-msgpack ServiceFound type-service-found
+  [ent]
+  (pack (vec (mapcat #(vector (:address %) (:port %) (:service-name %) (pr-str (:attributes %))) (:services ent))))
+  [data]
+  (let [service-data-coll (partition 4 (unpack data))
         services (for [[address port service-name attr-edn] service-data-coll]
                     (try
                       (let [attributes (edn/read-string attr-edn)]
@@ -313,17 +261,13 @@
   (ServiceFound. services))
 
 
-
 (defrecord ServiceNotFound [service-name attributes])
 
-(defext ServiceNotFound type-service-not-found
-  (fn [ent]
-    (pack-and-combine (:service-name ent) (pr-str (:attributes ent)))))
-
-(defmethod restore-ext type-service-not-found
-  [ext]
-  (let [data ^bytes (:data ext)
-        [service-name attr-edn] (unpack-n 2 data)]
+(extend-msgpack ServiceNotFound type-service-not-found
+  [ent]
+  (pack-and-combine (:service-name ent) (pr-str (:attributes ent)))
+  [data]
+  (let [[service-name attr-edn] (unpack-n 2 data)]
     (try
       (let [attributes (edn/read-string attr-edn)]
         (ServiceNotFound. service-name attributes))
@@ -334,6 +278,7 @@
 (defn service-not-found
   [service-name attributes]
   (ServiceNotFound. service-name attributes))
+
 
 
 (defn ping [] 2r01)

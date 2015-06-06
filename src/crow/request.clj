@@ -4,14 +4,13 @@
             [msgpack.core :as msgpack]
             [manifold.stream :refer [try-put! try-take! close!] :as s]
             [manifold.deferred :refer [let-flow chain] :as d]
-            [msgpack.core :refer [unpack] :as msgpack]
+            [msgpack.core :refer [pack unpack refine-ext] :as msgpack]
             [clojure.tools.logging :as log]
             [crow.logging :refer [trace-pr]]
-            [crow.protocol :refer [restore-ext pack]]
             [byte-streams :refer [to-byte-array]]
             [clojure.tools.logging :as log])
   (:import [com.shelf.messagepack MessagePackFrameDecoder]
-           [msgpack.core Extended]))
+           [msgpack.core Ext]))
 
 
 (defn frame-decorder
@@ -34,8 +33,8 @@
 (defn unpack-message
   [data]
   (let [msg (unpack data)]
-    (if (instance? Extended msg)
-      (restore-ext msg)
+    (if (instance? Ext msg)
+      (refine-ext msg)
       msg)))
 
 (def ^:dynamic *send-recv-timeout* 2000)
@@ -47,13 +46,12 @@
   (try-put! stream obj *send-recv-timeout* ::timeout))
 
 (defn read-message
-  "convert byte-buffer to byte-array and unpack the byte-array to a message format."
+  "unpack a byte-array to a message format."
   [data]
   (case data
     ::drained data
     ::timeout data
-    (let [barray (to-byte-array data)] ;TODO this action is not required at newest Aleph, but it is needed yet at 0.4.0-beta3.
-      (unpack-message barray))))
+    (unpack-message data)))
 
 (defn recv!
   "read from stream and unpack the received bytes.

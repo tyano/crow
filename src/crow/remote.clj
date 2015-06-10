@@ -100,7 +100,7 @@
 (defn invoke-with-service-finder
   [service-name attributes target-ns fn-name & args]
   (if-let [services (seq (find-service service-name attributes))]
-    (apply invoke (first services) target-ns fn-name args)
+    (apply invoke (first (shuffle services)) target-ns fn-name args)
     (throw (IllegalStateException. (format "Service Not Found: service-name=%s, attributes=%s"
                                       service-name
                                       (pr-str attributes))))))

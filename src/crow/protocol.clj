@@ -188,17 +188,18 @@
   (CallResult. obj))
 
 
-(defrecord CallException [stack-trace])
+(defrecord CallException [type stack-trace])
 
 (extend-msgpack CallException type-call-exception
   [ent]
-  (pack ^String (:stack-trace ent))
+  (pack-and-combine (:type ent) (:stack-trace ent))
   [data]
-  (CallException. (unpack data)))
+  (let [[type stack-trace] (unpack-n 2 data)]
+    (CallException. type stack-trace)))
 
 (defn call-exception
-  [stack-trace]
-  (CallException. stack-trace))
+  [type stack-trace]
+  (CallException. (name type) stack-trace))
 
 
 

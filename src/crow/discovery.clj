@@ -84,8 +84,9 @@
                            nil
 
                            (call-exception? msg)
-                           (let [stack-trace (:stack-trace msg)]
-                             (throw (Exception. ^String stack-trace)))
+                           (let [type-str    (:type msg)
+                                 stack-trace (:stack-trace msg)]
+                             (throw+ {:type (keyword type-str), :stack-trace stack-trace}))
 
                            (= :crow.request/timeout msg)
                            nil

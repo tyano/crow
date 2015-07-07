@@ -8,7 +8,9 @@
             [clojure.tools.logging :as log]
             [crow.logging :refer [trace-pr]]
             [crow.registrar-source :refer [static-registrar-source]]
-            [crow.id-store :refer [->FileIdStore] :as id]))
+            [crow.id-store :refer [->FileIdStore] :as id]
+            [slingshot.slingshot :refer [try+]]
+            [crow.utils :refer [extract-exception]]))
 
 
 (defrecord Service
@@ -41,18 +43,21 @@
     (let [target-fn (when (find-ns (symbol target-ns)) (find-var (symbol target-ns fn-name)))]
       (cond
         (not (public-ns-set target-ns))
-          (protocol-error error-namespace-is-not-public
-                          (format "namespace '%s' is not public for remote call" target-ns))
+        (protocol-error error-namespace-is-not-public
+                        (format "namespace '%s' is not public for remote call" target-ns))
+
         (not target-fn)
-          (protocol-error error-target-not-found
-                          (format "the fn %s/%s is not found." target-ns fn-name))
+        (protocol-error error-target-not-found
+                        (format "the fn %s/%s is not found." target-ns fn-name))
+
         :else
-          (try
+          (try+
             (let [r (apply target-fn args)]
               (call-result r))
-            (catch Throwable th
-              (log/error th "An error occurred in a function.")
-              (call-exception (format-stack-trace th))))))))
+            (catch Object ex
+              (log/error (:throwable &throw-context) "An error occurred in a function.")
+              (let [[type throwable] (extract-exception ex)]
+                (call-exception type (format-stack-trace throwable)))))))))
 
 (defn- handle-request
   [service msg]

@@ -20,47 +20,46 @@
       (if (= retry-count 0)
         (throw (IllegalStateException. "retry timeout!!"))
         (binding [request/*send-recv-timeout* timeout-ms]
-          (-> (send address port msg)
-              (chain
-                (fn [msg]
-                  (cond
-                    (false? msg) ; Could'nt send. retry
-                    (do
-                      (Thread/sleep *retry-interval*)
-                      (log/debug (str "RETRY! - remaining retry count : " (dec retry-count)))
-                      (d/recur (dec retry-count) timeout-ms))
+          (let [req (-> (send address port msg)
+                        (chain
+                          (fn [msg]
+                            (cond
+                              (false? msg) ; Could'nt send. retry
+                              (do
+                                (Thread/sleep *retry-interval*)
+                                (log/debug (str "RETRY! - remaining retry count : " (dec retry-count)))
+                                (d/recur (dec retry-count) timeout-ms))
 
-                    (call-exception? msg)
-                    (let [stack-trace (:stack-trace msg)]
-                      (throw (Exception. ^String stack-trace)))
+                              (call-exception? msg)
+                              (let [type-str    (:type msg)
+                                    stack-trace (:stack-trace msg)]
+                                (throw+ {:type (keyword type-str), :stack-trace stack-trace}))
 
-                    (call-result? msg)
-                    (:obj msg)
+                              (call-result? msg)
+                              (:obj msg)
 
-                    :crow.request/timeout
-                    (do
-                      (Thread/sleep *retry-interval*)
-                      (log/debug (str "RETRY! - remaining retry count : " (dec retry-count)))
-                      (d/recur (dec retry-count) timeout-ms))
+                              :crow.request/timeout
+                              (do
+                                (Thread/sleep *retry-interval*)
+                                (log/debug (str "RETRY! - remaining retry count : " (dec retry-count)))
+                                (d/recur (dec retry-count) timeout-ms))
 
-                    :crow.request/drained
-                    (do
-                      (log/debug "DRAINED!")
-                      nil)
+                              :crow.request/drained
+                              (do
+                                (log/debug "DRAINED!")
+                                nil)
 
-                    :else
-                    (throw (IllegalStateException. (str "No such message format: " (pr-str msg))))))
-                (fn [result]
-                  (try
-                    (if (instance? Recur result)
-                      result
-                      (when-not (nil? result)
-                        (>!! ch result)))
-                    (finally
-                      (close! ch)))))
-              (d/catch
-                (fn [th]
-                  (>!! ch th)))))))
+                              :else
+                              (throw (IllegalStateException. (str "No such message format: " (pr-str msg))))))))]
+            (d/on-realized req
+              (fn [result]
+                (try
+                  (when-not (nil? result)
+                    (>!! ch result))
+                  (finally
+                    (close! ch))))
+              (fn [th]
+                (>!! ch th)))))))
     ch))
 
 (def ^:dynamic *default-finder*)

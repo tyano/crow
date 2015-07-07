@@ -13,7 +13,8 @@
             [clojure.tools.logging :as log]
             [crow.logging :refer [trace-pr debug-pr info-pr]]
             [byte-streams :refer [to-byte-array]]
-            [clojure.set :refer [superset?]])
+            [clojure.set :refer [superset?]]
+            [crow.utils :refer [extract-exception]])
   (:import [java.util UUID])
   (:gen-class))
 
@@ -153,8 +154,9 @@
         (d/catch
           (fn [ex]
             (log/error ex "An Error ocurred.")
-            (s/put! stream (call-exception (format-stack-trace ex)))
-            (s/close! stream)))))))
+            (let [[type throwable] (extract-exception ex)]
+              (s/put! stream (call-exception type (format-stack-trace throwable)))
+              (s/close! stream))))))))
 
 (defn start-registrar-service
   "Starting a registrar and wait requests.

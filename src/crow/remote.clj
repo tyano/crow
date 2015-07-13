@@ -33,7 +33,7 @@
                           (call-exception? msg)
                           (let [type-str    (:type msg)
                                 stack-trace (:stack-trace msg)]
-                            (throw+ {:type (keyword type-str), :stack-trace stack-trace}))
+                            (throw+ {:type (keyword type-str)} stack-trace))
 
                           (call-result? msg)
                           (:obj msg)

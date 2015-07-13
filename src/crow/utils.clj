@@ -3,10 +3,15 @@
 
 
 (defn extract-exception
-  [ex]
-  (let [{:keys [object throwable]} (get-context ex)
+  [{:keys [object throwable wrapper]}]
+  (let [th   (or wrapper throwable)
         type (cond
-                (instance? Throwable object) :error
-                (associative? object)        (or (:type object) :error)
-                :else                        :error)]
-    [type throwable]))
+                (instance? Throwable object)
+                :error
+
+                (associative? object)
+                (or (:type object) :error)
+
+                :else
+                :error)]
+    [type th]))

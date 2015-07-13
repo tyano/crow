@@ -56,7 +56,7 @@
               (call-result r))
             (catch Object ex
               (log/error (:throwable &throw-context) "An error occurred in a function.")
-              (let [[type throwable] (extract-exception ex)]
+              (let [[type throwable] (extract-exception &throw-context)]
                 (call-exception type (format-stack-trace throwable)))))))))
 
 (defn- handle-request

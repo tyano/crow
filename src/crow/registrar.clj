@@ -14,7 +14,8 @@
             [crow.logging :refer [trace-pr debug-pr info-pr]]
             [byte-streams :refer [to-byte-array]]
             [clojure.set :refer [superset?]]
-            [crow.utils :refer [extract-exception]])
+            [crow.utils :refer [extract-exception]]
+            [slingshot.support :refer [get-context]])
   (:import [java.util UUID])
   (:gen-class))
 
@@ -154,7 +155,7 @@
         (d/catch
           (fn [ex]
             (log/error ex "An Error ocurred.")
-            (let [[type throwable] (extract-exception ex)]
+            (let [[type throwable] (extract-exception (get-context ex))]
               (s/put! stream (call-exception type (format-stack-trace throwable)))
               (s/close! stream))))))))
 

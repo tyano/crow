@@ -334,6 +334,10 @@
   [msg]
   (instance? ServiceNotFound msg))
 
+(defn protocol-error?
+  [msg]
+  (instance? ProtocolError msg))
+
 (defn ping? [msg] (= msg 2r01))
 (defn ack? [msg] (= msg 2r10))
 

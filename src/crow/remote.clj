@@ -1,6 +1,6 @@
 (ns crow.remote
   (:refer-clojure :exclude [send])
-  (:require [crow.protocol :refer [remote-call call-result? call-exception?]]
+  (:require [crow.protocol :refer [remote-call call-result? call-exception? protocol-error?]]
             [crow.request :refer [send] :as request]
             [manifold.deferred :refer [chain] :as d]
             [clojure.core.async :refer [>!! chan <!! close! alts!! timeout thread]]
@@ -29,6 +29,9 @@
                             (Thread/sleep *retry-interval*)
                             (log/debug (str "RETRY! - remaining retry count : " (dec retry-count)))
                             (d/recur (dec retry-count) timeout-ms))
+
+                          (protocol-error? msg)
+                          (throw+ {:type :protocol-error, :error-code (:error-code msg), :message (:message msg)})
 
                           (call-exception? msg)
                           (let [type-str    (:type msg)

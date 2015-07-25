@@ -42,13 +42,13 @@
   (trace-pr "remote-call response:"
     (let [target-fn (when (find-ns (symbol target-ns)) (find-var (symbol target-ns fn-name)))]
       (cond
-        (not (public-ns-set target-ns))
-        (protocol-error error-namespace-is-not-public
-                        (format "namespace '%s' is not public for remote call" target-ns))
-
         (not target-fn)
         (protocol-error error-target-not-found
                         (format "the fn %s/%s is not found." target-ns fn-name))
+
+        (not (public-ns-set target-ns))
+        (protocol-error error-namespace-is-not-public
+                        (format "namespace '%s' is not public for remote call" target-ns))
 
         :else
           (try+

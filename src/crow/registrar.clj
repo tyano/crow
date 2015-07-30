@@ -7,7 +7,7 @@
                                    join-request? heart-beat? discovery? ping?
                                    protocol-error ack call-exception
                                    service-found service-not-found] :as p]
-            [crow.request :refer [frame-decorder wrap-duplex-stream format-stack-trace]]
+            [crow.request :refer [frame-decorder wrap-duplex-stream format-stack-trace] :as request]
             [clojure.core.async :refer [go-loop chan <! onto-chan thread]]
             [crow.service :as sv]
             [clojure.tools.logging :as log]
@@ -140,24 +140,31 @@
   [registrar renewal-ms buffer-size stream info]
   (let [source (buffer buffer-size stream)]
     (d/loop []
-      (-> (s/take! source ::none)
+      (-> (s/take! source)
         (d/chain
           (fn [msg]
-            (if (= msg ::none)
-              ::none
+            (when (some? msg)
               (d/future (handle-request registrar renewal-ms msg))))
           (fn [msg']
-            (when-not (= msg' ::none)
-              (s/put! stream msg')))
+            (when (some? msg')
+              (d/future (s/try-put! stream msg' request/*send-recv-timeout*))))
           (fn [result]
-            (when result
-              (d/recur))))
+            (when (some? result)
+              (cond
+                (false? result) ;can not send response
+                (do
+                  (log/error "Registrar Timeout: Couldn't write response.")
+                  (s/close! stream))
+
+                :else
+                (d/recur)))))
         (d/catch
           (fn [ex]
             (log/error ex "An Error ocurred.")
             (let [[type throwable] (extract-exception (get-context ex))]
-              (s/put! stream (call-exception type (format-stack-trace throwable)))
-              (s/close! stream))))))))
+              (if (s/try-put! stream (call-exception type (format-stack-trace throwable)) request/*send-recv-timeout*)
+                (d/recur)
+                (s/close! stream)))))))))
 
 (defn start-registrar-service
   "Starting a registrar and wait requests.

@@ -69,23 +69,30 @@
   [service buffer-size stream info]
   (let [source (buffer buffer-size stream)]
     (d/loop []
-      (-> (s/take! source ::none)
+      (-> (s/take! source)
         (d/chain
           (fn [msg]
-            (if (= msg ::none)
-              ::none
+            (when (some? msg)
               (d/future (handle-request service msg))))
           (fn [msg']
-            (when-not (= msg' ::none)
-              (s/put! stream msg')))
+            (when (some? msg')
+              (d/future (s/try-put! stream msg' request/*send-recv-timeout*))))
           (fn [result]
-            (when result
-              (d/recur))))
+            (when (some? result)
+              (cond
+                (false? result) ;can not send response
+                (do
+                  (log/error "Service Timeout: Couldn't write response.")
+                  (s/close! stream))
+
+                :else
+                (d/recur)))))
         (d/catch
           (fn [ex]
             (log/error ex "An Error ocurred.")
-            (s/put! stream (call-exception (format-stack-trace ex)))
-            (s/close! stream)))))))
+            (if (s/try-put! stream (call-exception (format-stack-trace ex)) request/*send-recv-timeout*)
+              (d/recur)
+              (s/close! stream))))))))
 
 (defn start-service
   [{:keys [address port name attributes id-store public-namespaces registrar-source

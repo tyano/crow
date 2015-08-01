@@ -1,6 +1,7 @@
 (ns crow.configuration
   (:require [clojure.java.io :refer [reader]]
-            [clojure.edn :as edn]))
+            [clojure.edn :as edn])
+  (:import [java.io PushbackReader]))
 
 
 (defn- read-from-file
@@ -29,7 +30,7 @@
   this load the file-contents as a EDN string (not Clojure program).
   The EDN string must be a map containing all configurations."
   [file-path]
-  (with-open [stream (reader file-path)]
+  (with-open [stream (PushbackReader. (reader file-path))]
     (let [config (edn/read stream)]
       (assert-map config)
       config)))

@@ -102,7 +102,7 @@
                   (log/error (str "Timeout: Couldn't send a message: " (pr-str req)))
                   ::timeout)
 
-                (d/future @(recv! stream))))
+                (recv! stream)))
             (fn [msg]
               (log/trace "receive!")
               (case msg

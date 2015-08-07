@@ -10,7 +10,10 @@
             [crow.registrar-source :refer [static-registrar-source]]
             [crow.id-store :refer [->FileIdStore] :as id]
             [slingshot.slingshot :refer [try+]]
-            [crow.utils :refer [extract-exception]]))
+            [crow.utils :refer [extract-exception]])
+  (:import [io.netty.util.concurrent DefaultEventExecutorGroup EventExecutorGroup]
+           [java.util.concurrent ThreadFactory]
+           [io.netty.channel ChannelHandler]))
 
 
 (defrecord Service
@@ -73,10 +76,10 @@
         (d/chain
           (fn [msg]
             (when (some? msg)
-              (d/future (handle-request service msg))))
+              (handle-request service msg)))
           (fn [msg']
             (when (some? msg')
-              (d/future (s/try-put! stream msg' request/*send-recv-timeout*))))
+              (s/try-put! stream msg' request/*send-recv-timeout*)))
           (fn [result]
             (when (some? result)
               (cond
@@ -94,6 +97,22 @@
               (d/recur)
               (s/close! stream))))))))
 
+(def thread-counter (atom 0))
+
+(def ^EventExecutorGroup event-executor
+  (DefaultEventExecutorGroup.
+    16
+    (reify ThreadFactory
+      (newThread [_ runner]
+        (Thread. runner (str "crow-service-thread-" (swap! thread-counter inc)))))))
+
+(defn- pipeline-transform
+  [pipeline]
+  (let [main-handler ^ChannelHandler (.remove pipeline "handler")]
+    (-> pipeline
+      (.addLast event-executor "handler" main-handler)
+      (.addFirst "framer" (frame-decorder)))))
+
 (defn start-service
   [{:keys [address port name attributes id-store public-namespaces registrar-source
            fetch-registrar-interval-ms heart-beat-buffer-ms dead-registrar-check-interval
@@ -106,7 +125,7 @@
       (fn [stream info]
         (service-handler service buffer-size (wrap-duplex-stream stream) info))
       {:port port
-       :pipeline-transform #(.addFirst % "framer" (frame-decorder))})
+       :pipeline-transform pipeline-transform})
     (let [join-mgr (start-join-manager registrar-source
                                        fetch-registrar-interval-ms
                                        dead-registrar-check-interval

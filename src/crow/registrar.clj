@@ -16,7 +16,10 @@
             [clojure.set :refer [superset?]]
             [crow.utils :refer [extract-exception]]
             [slingshot.support :refer [get-context]])
-  (:import [java.util UUID])
+  (:import [java.util UUID]
+           [io.netty.util.concurrent DefaultEventExecutorGroup EventExecutorGroup]
+           [java.util.concurrent ThreadFactory]
+           [io.netty.channel ChannelHandler])
   (:gen-class))
 
 (def ^:const default-renewal-ms 10000)
@@ -144,10 +147,10 @@
         (d/chain
           (fn [msg]
             (when (some? msg)
-              (d/future (handle-request registrar renewal-ms msg))))
+              (handle-request registrar renewal-ms msg)))
           (fn [msg']
             (when (some? msg')
-              (d/future (s/try-put! stream msg' request/*send-recv-timeout*))))
+              (s/try-put! stream msg' request/*send-recv-timeout*)))
           (fn [result]
             (when (some? result)
               (cond
@@ -166,6 +169,23 @@
                 (d/recur)
                 (s/close! stream)))))))))
 
+(def thread-counter (atom 0))
+
+(def ^EventExecutorGroup event-executor
+  (DefaultEventExecutorGroup.
+    16
+    (reify ThreadFactory
+      (newThread [_ runner]
+        (Thread. runner (str "crow-registrar-thread-" (swap! thread-counter inc)))))))
+
+(defn- pipeline-transform
+  [pipeline]
+  (let [main-handler ^ChannelHandler (.remove pipeline "handler")]
+    (-> pipeline
+      (.addLast event-executor "handler" main-handler)
+      (.addFirst "framer" (frame-decorder)))))
+
+
 (defn start-registrar-service
   "Starting a registrar and wait requests.
   An argument is a map of configurations of keys:
@@ -181,7 +201,7 @@
       (fn [stream info]
         (registrar-handler registrar renewal-ms buffer-size (wrap-duplex-stream stream) info))
       {:port port
-       :pipeline-transform #(.addFirst % "framer" (frame-decorder))})))
+       :pipeline-transform pipeline-transform})))
 
 
 (defn -main

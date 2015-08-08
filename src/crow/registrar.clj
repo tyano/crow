@@ -147,10 +147,10 @@
         (d/chain
           (fn [msg]
             (when (some? msg)
-              (handle-request registrar renewal-ms msg)))
+              (d/future (handle-request registrar renewal-ms msg))))
           (fn [msg']
             (when (some? msg')
-              (s/try-put! stream msg' request/*send-recv-timeout*)))
+              (d/future (s/try-put! stream msg' request/*send-recv-timeout*))))
           (fn [result]
             (when (some? result)
               (cond

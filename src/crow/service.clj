@@ -76,10 +76,10 @@
         (d/chain
           (fn [msg]
             (when (some? msg)
-              (handle-request service msg)))
+              (d/future (handle-request service msg))))
           (fn [msg']
             (when (some? msg')
-              (s/try-put! stream msg' request/*send-recv-timeout*)))
+              (d/future (s/try-put! stream msg' request/*send-recv-timeout*))))
           (fn [result]
             (when (some? result)
               (cond

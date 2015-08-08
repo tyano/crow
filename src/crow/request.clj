@@ -10,7 +10,10 @@
             [byte-streams :refer [to-byte-array]]
             [clojure.tools.logging :as log])
   (:import [com.shelf.messagepack MessagePackFrameDecoder]
-           [msgpack.core Ext]))
+           [msgpack.core Ext]
+           [io.netty.util.concurrent DefaultEventExecutorGroup EventExecutorGroup]
+           [java.util.concurrent ThreadFactory]
+           [io.netty.channel ChannelHandler]))
 
 
 (defn frame-decorder
@@ -71,6 +74,22 @@
       in)
     (s/splice out in)))
 
+(def thread-counter (atom 0))
+
+(def ^EventExecutorGroup event-executor
+  (DefaultEventExecutorGroup.
+    16
+    (reify ThreadFactory
+      (newThread [_ runner]
+        (Thread. runner (str "crow-client-thread-" (swap! thread-counter inc)))))))
+
+(defn- pipeline-transform
+  [pipeline]
+  (let [main-handler ^ChannelHandler (.remove pipeline "handler")]
+    (-> pipeline
+      (.addLast event-executor "handler" main-handler)
+      (.addFirst "framer" (frame-decorder)))))
+
 (defn client
   [address port]
   (chain (tcp/client {:host address,
@@ -102,7 +121,7 @@
                   (log/error (str "Timeout: Couldn't send a message: " (pr-str req)))
                   ::timeout)
 
-                (recv! stream)))
+                (d/future (recv! stream))))
             (fn [msg]
               (log/trace "receive!")
               (case msg

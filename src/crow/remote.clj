@@ -16,19 +16,21 @@
   [{:keys [address port] :as service} target-ns fn-name & args]
   (let [ch  (chan)
         msg (remote-call target-ns fn-name args)
-        req (d/loop [retry-count 3 timeout-ms request/*send-recv-timeout*]
-              (if (= retry-count 0)
-                (throw (IllegalStateException. "retry timeout!!"))
-                (binding [request/*send-recv-timeout* timeout-ms]
-                  (-> (send address port msg)
-                    (chain
-                      (fn [msg]
+        timeout-ms request/*send-recv-timeout*]
+    (thread
+      (try
+        (binding [request/*send-recv-timeout* timeout-ms]
+          (let [result
+                  (loop [retry-count 3]
+                    (if (= retry-count 0)
+                      (throw (IllegalStateException. "retry timeout!!"))
+                      (let [msg @(send address port msg)]
                         (cond
                           (false? msg) ; Could'nt send. retry
                           (do
                             (Thread/sleep *retry-interval*)
                             (log/debug (str "RETRY! - remaining retry count : " (dec retry-count)))
-                            (d/recur (dec retry-count) timeout-ms))
+                            (recur (dec retry-count)))
 
                           (protocol-error? msg)
                           (throw+ {:type :protocol-error, :error-code (:error-code msg), :message (:message msg)})
@@ -45,7 +47,7 @@
                           (do
                             (Thread/sleep *retry-interval*)
                             (log/debug (str "RETRY! - remaining retry count : " (dec retry-count)))
-                            (d/recur (dec retry-count) timeout-ms))
+                            (recur (dec retry-count)))
 
                           :crow.request/drained
                           (do
@@ -53,16 +55,14 @@
                             nil)
 
                           :else
-                          (throw (IllegalStateException. (str "No such message format: " (pr-str msg)))))))))))]
-    (d/on-realized req
-      (fn [result]
-        (try
-          (when-not (nil? result)
-            (>!! ch result))
-          (finally
-            (close! ch))))
-      (fn [th]
-        (>!! ch th)))
+                          (throw (IllegalStateException. (str "No such message format: " (pr-str msg))))))))]
+          (try
+            (when-not (nil? result)
+              (>!! ch result))
+            (finally
+              (close! ch)))))
+        (catch Throwable th
+          (>!! ch th))))
     ch))
 
 (def ^:dynamic *default-finder*)

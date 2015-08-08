@@ -76,7 +76,7 @@
               (d/future (handle-request service msg))))
           (fn [msg']
             (when (some? msg')
-              (d/future (s/try-put! stream msg' request/*send-recv-timeout*))))
+              (s/try-put! stream msg' request/*send-recv-timeout*)))
           (fn [result]
             (when (some? result)
               (cond

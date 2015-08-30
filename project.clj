@@ -21,8 +21,7 @@
         crow.registrar
         crow.protocol
         crow.discovery
-        crow.marshaller
-        crow.starter]
+        crow.marshaller]
   :main crow.registrar)
 
 (cemerick.pomegranate.aether/register-wagon-factory!

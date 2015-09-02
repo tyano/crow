@@ -16,7 +16,9 @@
   :profiles {:dev {:dependencies [[midje "1.7.0"]
                                   [ch.qos.logback/logback-classic "1.1.3"]]
                    :resource-paths ["resources-dev"]
-                   :jvm-opts ["-Djava.net.preferIPv4Stack=true"]}}
+                   :jvm-opts ["-Djava.net.preferIPv4Stack=true"]}
+             :uberjar {:dependencies [[ch.qos.logback/logback-classic "1.1.3"]]
+                       :resource-paths ["resources-release"]}}
   :aot [crow.registrar-source
         crow.registrar
         crow.protocol

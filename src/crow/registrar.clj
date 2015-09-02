@@ -35,7 +35,7 @@
 
 (defn accept-service-registration
   [registrar address port sid service-name attributes]
-  (log/debug "service registration:" address port sid service-name (pr-str attributes))
+  (log/info "service registration:" address port sid service-name (pr-str attributes))
   (let [service-id (or sid (new-service-id))
         expire-at  (-> (now) (plus (millis (:renewal-ms registrar))))
         services   (swap! (:services registrar)
@@ -46,7 +46,7 @@
                                               service-name
                                               attributes
                                               expire-at)))]
-    (debug-pr "registered:"
+    (info-pr "registered:"
       (registration service-id expire-at))))
 
 

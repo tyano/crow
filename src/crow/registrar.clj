@@ -137,34 +137,38 @@
     :else               (invalid-message msg)))
 
 (defn registrar-handler
-  [registrar renewal-ms buffer-size stream info]
-  (let [source (buffer buffer-size stream)]
+  [registrar renewal-ms stream info]
+  (->
     (d/loop []
-      (-> (s/take! source)
+      (-> (s/try-take! stream ::none request/*send-recv-timeout* ::none)
         (d/chain
           (fn [msg]
-            (when (some? msg)
+            (if (= ::none msg)
+              ::none
               (d/future (handle-request registrar renewal-ms msg))))
           (fn [msg']
-            (when (some? msg')
-              (s/try-put! stream msg' request/*send-recv-timeout*)))
+            (when-not (= ::none msg')
+              (s/try-put! stream msg' request/*send-recv-timeout* ::timeout)))
           (fn [result]
             (when (some? result)
               (cond
-                (false? result) ;can not send response
-                (do
-                  (log/error "Registrar Timeout: Couldn't write response.")
-                  (s/close! stream))
+                (= result ::timeout)
+                (log/error "Registrar Timeout: Couldn't write response.")
+
+                (true? result)
+                (d/recur)
 
                 :else
-                (d/recur)))))
+                (log/error "Registrar Error: Couldn't write response.")))))
         (d/catch
           (fn [ex]
             (log/error ex "An Error ocurred.")
             (let [[type throwable] (extract-exception (get-context ex))]
-              (if (s/try-put! stream (call-exception type (format-stack-trace throwable)) request/*send-recv-timeout*)
-                (d/recur)
-                (s/close! stream)))))))))
+              (s/try-put! stream (call-exception type (format-stack-trace throwable)) request/*send-recv-timeout*)
+              nil)))))
+    (d/finally
+      (fn []
+        (s/close! stream)))))
 
 (defn start-registrar-service
   "Starting a registrar and wait requests.
@@ -173,13 +177,13 @@
   :port a waiting port number.
   :renewal-ms  milliseconds for make each registered services expired. Services must send a 'lease' request before the expiration.
   :watch-internal  milliseconds for checking each service is expired or not."
-  [{:keys [port name renewal-ms watch-interval buffer-size] :or {port 4000, renewal-ms default-renewal-ms, watch-interval default-watch-interval, buffer-size 10}}]
+  [{:keys [port name renewal-ms watch-interval] :or {port 4000, renewal-ms default-renewal-ms, watch-interval default-watch-interval}}]
   (let [registrar (new-registrar name renewal-ms watch-interval)]
     (log/info (str "#### REGISTRAR SERVICE (name: " (pr-str name) " port: " port ") starts."))
     (process-registrar registrar)
     (tcp/start-server
       (fn [stream info]
-        (registrar-handler registrar renewal-ms buffer-size (wrap-duplex-stream stream) info))
+        (registrar-handler registrar renewal-ms (wrap-duplex-stream stream) info))
       {:port port
        :pipeline-transform #(.addFirst % "framer" (frame-decorder))})))
 

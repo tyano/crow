@@ -10,7 +10,8 @@
             [crow.registrar-source :refer [static-registrar-source]]
             [crow.id-store :refer [->FileIdStore] :as id]
             [slingshot.slingshot :refer [try+]]
-            [crow.utils :refer [extract-exception]]))
+            [crow.utils :refer [extract-exception]]
+            [slingshot.support :refer [get-context]]))
 
 
 (defrecord Service
@@ -66,45 +67,50 @@
     :else (invalid-message msg)))
 
 (defn- service-handler
-  [service buffer-size stream info]
-  (let [source (buffer buffer-size stream)]
+  [service stream info]
+  (->
     (d/loop []
-      (-> (s/take! source)
+      (-> (s/try-take! stream ::none request/*send-recv-timeout* ::none)
         (d/chain
           (fn [msg]
-            (when (some? msg)
+            (if (= ::none msg)
+              ::none
               (d/future (handle-request service msg))))
           (fn [msg']
-            (when (some? msg')
-              (s/try-put! stream msg' request/*send-recv-timeout*)))
+            (when-not (= ::none msg')
+              (s/try-put! stream msg' request/*send-recv-timeout* ::timeout)))
           (fn [result]
             (when (some? result)
               (cond
-                (false? result) ;can not send response
-                (do
-                  (log/error "Service Timeout: Couldn't write response.")
-                  (s/close! stream))
+                (= result ::timeout)
+                (log/error "Service Timeout: Couldn't write response.")
+
+                (true? result)
+                (d/recur)
 
                 :else
-                (d/recur)))))
+                (log/error "Service Error: Couldn't write response.")))))
         (d/catch
           (fn [ex]
             (log/error ex "An Error ocurred.")
-            (if (s/try-put! stream (call-exception (format-stack-trace ex)) request/*send-recv-timeout*)
-              (d/recur)
-              (s/close! stream))))))))
+            (let [[type throwable] (extract-exception (get-context ex))]
+              (s/try-put! stream (call-exception type (format-stack-trace throwable)) request/*send-recv-timeout*)
+              nil)))))
+    (d/finally
+      (fn []
+        (s/close! stream)))))
 
 (defn start-service
   [{:keys [address port name attributes id-store public-namespaces registrar-source
            fetch-registrar-interval-ms heart-beat-buffer-ms dead-registrar-check-interval
-           rejoin-interval-ms buffer-size] :or {address "localhost" attributes {} buffer-size 10} :as config}]
+           rejoin-interval-ms] :or {address "localhost" attributes {}} :as config}]
   {:pre [port (not (clojure.string/blank? name)) id-store (seq public-namespaces) registrar-source fetch-registrar-interval-ms heart-beat-buffer-ms]}
   (apply require (map symbol public-namespaces))
   (let [sid     (id/read id-store)
         service (new-service address port sid name attributes id-store (set public-namespaces))]
     (tcp/start-server
       (fn [stream info]
-        (service-handler service buffer-size (wrap-duplex-stream stream) info))
+        (service-handler service (wrap-duplex-stream stream) info))
       {:port port
        :pipeline-transform #(.addFirst % "framer" (frame-decorder))})
     (let [join-mgr (start-join-manager registrar-source

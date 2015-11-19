@@ -137,10 +137,10 @@
     :else               (invalid-message msg)))
 
 (defn registrar-handler
-  [registrar renewal-ms stream info]
+  [registrar renewal-ms stream info timeout-ms]
   (->
     (d/loop []
-      (-> (s/try-take! stream ::none request/*send-recv-timeout* ::none)
+      (-> (s/try-take! stream ::none timeout-ms ::none)
         (d/chain
           (fn [msg]
             (if (= ::none msg)
@@ -148,7 +148,7 @@
               (d/future (handle-request registrar renewal-ms msg))))
           (fn [msg']
             (when-not (= ::none msg')
-              (s/try-put! stream msg' request/*send-recv-timeout* ::timeout)))
+              (s/try-put! stream msg' timeout-ms ::timeout)))
           (fn [result]
             (when (some? result)
               (cond
@@ -164,7 +164,7 @@
           (fn [ex]
             (log/error ex "An Error ocurred.")
             (let [[type throwable] (extract-exception (get-context ex))]
-              (s/try-put! stream (call-exception type (format-stack-trace throwable)) request/*send-recv-timeout*)
+              (s/try-put! stream (call-exception type (format-stack-trace throwable)) timeout-ms)
               nil)))))
     (d/finally
       (fn []
@@ -177,13 +177,15 @@
   :port a waiting port number.
   :renewal-ms  milliseconds for make each registered services expired. Services must send a 'lease' request before the expiration.
   :watch-internal  milliseconds for checking each service is expired or not."
-  [{:keys [port name renewal-ms watch-interval] :or {port 4000, renewal-ms default-renewal-ms, watch-interval default-watch-interval}}]
+  [{:keys [port name renewal-ms watch-interval send-recv-timeout]
+    :or {port 4000, renewal-ms default-renewal-ms, watch-interval default-watch-interval send-recv-timeout nil}}]
+
   (let [registrar (new-registrar name renewal-ms watch-interval)]
     (log/info (str "#### REGISTRAR SERVICE (name: " (pr-str name) " port: " port ") starts."))
     (process-registrar registrar)
     (tcp/start-server
       (fn [stream info]
-        (registrar-handler registrar renewal-ms (wrap-duplex-stream stream) info))
+        (registrar-handler registrar renewal-ms (wrap-duplex-stream stream) info send-recv-timeout))
       {:port port
        :pipeline-transform #(.addFirst % "framer" (frame-decorder))})))
 

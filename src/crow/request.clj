@@ -2,13 +2,14 @@
   (:refer-clojure :exclude [send])
   (:require [aleph.tcp :as tcp]
             [msgpack.core :as msgpack]
-            [manifold.stream :refer [try-put! try-take! close!] :as s]
+            [manifold.stream :refer [try-put! try-take! close! take! put!] :as ms]
             [manifold.deferred :refer [let-flow chain] :as d]
             [msgpack.core :refer [pack unpack refine-ext] :as msgpack]
             [clojure.tools.logging :as log]
             [crow.logging :refer [trace-pr]]
             [byte-streams :refer [to-byte-array]]
-            [clojure.tools.logging :as log])
+            [clojure.tools.logging :as log]
+            [schema.core :as s])
   (:import [com.shelf.messagepack MessagePackFrameDecoder]
            [msgpack.core Ext]))
 
@@ -37,39 +38,51 @@
       (refine-ext msg)
       msg)))
 
-(def ^:dynamic *send-recv-timeout* 2000)
+(def ConnectionErrorType (s/enum :drained :timeout :connect-failed))
+
+;;; type describing connection errors.
+(s/defrecord ConnectionError [type :- ConnectionErrorType])
+
+(def drained (ConnectionError. :drained))
+(def timeout (ConnectionError. :timeout))
+(def connect-failed (ConnectionError. :connect-failed))
+
 
 (defn send!
   "convert object into bytes and send the bytes into stream.
   returns a differed object holding true or false."
-  [stream obj]
-  (try-put! stream obj *send-recv-timeout* ::timeout))
+  [stream obj timeout-ms]
+  (if timeout-ms
+    (try-put! stream obj timeout-ms timeout)
+    (put! stream obj)))
 
 (defn read-message
   "unpack a byte-array to a message format."
   [data]
   (case data
-    ::drained data
-    ::timeout data
+    drained data
+    timeout data
     (unpack-message data)))
 
 (defn recv!
   "read from stream and unpack the received bytes.
   returns a differed object holding an unpacked object."
-  [stream]
-  (try-take! stream ::drained *send-recv-timeout* ::timeout))
+  [stream timeout-ms]
+  (if timeout-ms
+    (try-take! stream drained timeout-ms timeout)
+    (take! stream drained)))
 
 (defn wrap-duplex-stream
   [stream]
-  (let [out (s/stream)
-        in  (s/stream)]
-    (s/connect
-      (s/map pack out)
+  (let [out (ms/stream)
+        in  (ms/stream)]
+    (ms/connect
+      (ms/map pack out)
       stream)
-    (s/connect
-      (s/map read-message stream)
+    (ms/connect
+      (ms/map read-message stream)
       in)
-    (s/splice out in)))
+    (ms/splice out in)))
 
 (defn client
   [address port]
@@ -79,15 +92,15 @@
     #(wrap-duplex-stream %)))
 
 (defn send
-  [address port req]
-  (log/trace "send-recv-timeout:" *send-recv-timeout*)
+  [address port req timeout-ms]
+  (log/trace "send-recv-timeout:" timeout-ms)
   (chain (tcp/client {:host address,
                       :port port,
                       :pipeline-transform #(.addFirst % "framer" (frame-decorder))})
     #(wrap-duplex-stream %)
     (fn [stream]
       (log/trace "sending...")
-      (-> (send! stream req)
+      (-> (send! stream req timeout-ms)
           (chain
             (fn [sent]
               (log/trace "sent!")
@@ -97,27 +110,27 @@
                   (log/error (str "Couldn't send a message: " (pr-str req)))
                   false)
 
-                ::timeout
+                timeout
                 (do
                   (log/error (str "Timeout: Couldn't send a message: " (pr-str req)))
-                  ::timeout)
+                  timeout)
 
-                (recv! stream)))
+                (recv! stream timeout-ms)))
             (fn [msg]
               (log/trace "receive!")
               (case msg
                 false
                 false
 
-                ::timeout
+                timeout
                 (do
                   (log/error (str "Timeout: Couldn't receive a response for a req: " (pr-str req)))
-                  ::timeout)
+                  timeout)
 
-                ::drained
+                drained
                 (do
                   (log/error (str "Drained: Peer closed: req: " (pr-str req)))
-                  ::drained)
+                  drained)
 
                 msg)))
           (d/catch

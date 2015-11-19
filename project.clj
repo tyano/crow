@@ -10,7 +10,8 @@
                  [org.clojure/core.async "0.1.346.0-17112a-alpha"]
                  [org.clojure/tools.logging "0.3.1"]
                  [slingshot "0.12.2"]
-                 [com.shelf/messagepack-framedecoder "1.0-SNAPSHOT"]]
+                 [com.shelf/messagepack-framedecoder "1.0-SNAPSHOT"]
+                 [prismatic/schema "1.0.3"]]
   :plugins [[lein-midje "3.1.3"]]
   :repositories {"javelindev-snapshots" "http://javelindev.jp/repository/snapshots"}
   :profiles {:dev {:dependencies [[midje "1.7.0"]

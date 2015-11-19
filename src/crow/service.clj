@@ -67,10 +67,10 @@
     :else (invalid-message msg)))
 
 (defn- service-handler
-  [service stream info]
+  [service stream info timeout-ms]
   (->
     (d/loop []
-      (-> (s/try-take! stream ::none request/*send-recv-timeout* ::none)
+      (-> (s/try-take! stream ::none timeout-ms ::none)
         (d/chain
           (fn [msg]
             (if (= ::none msg)
@@ -78,7 +78,7 @@
               (d/future (handle-request service msg))))
           (fn [msg']
             (when-not (= ::none msg')
-              (s/try-put! stream msg' request/*send-recv-timeout* ::timeout)))
+              (s/try-put! stream msg' timeout-ms ::timeout)))
           (fn [result]
             (when (some? result)
               (cond
@@ -94,7 +94,7 @@
           (fn [ex]
             (log/error ex "An Error ocurred.")
             (let [[type throwable] (extract-exception (get-context ex))]
-              (s/try-put! stream (call-exception type (format-stack-trace throwable)) request/*send-recv-timeout*)
+              (s/try-put! stream (call-exception type (format-stack-trace throwable)) timeout-ms)
               nil)))))
     (d/finally
       (fn []
@@ -103,14 +103,14 @@
 (defn start-service
   [{:keys [address port name attributes id-store public-namespaces registrar-source
            fetch-registrar-interval-ms heart-beat-buffer-ms dead-registrar-check-interval
-           rejoin-interval-ms] :or {address "localhost" attributes {}} :as config}]
+           rejoin-interval-ms send-recv-timeout] :or {address "localhost" attributes {} send-recv-timeout nil} :as config}]
   {:pre [port (not (clojure.string/blank? name)) id-store (seq public-namespaces) registrar-source fetch-registrar-interval-ms heart-beat-buffer-ms]}
   (apply require (map symbol public-namespaces))
   (let [sid     (id/read id-store)
         service (new-service address port sid name attributes id-store (set public-namespaces))]
     (tcp/start-server
       (fn [stream info]
-        (service-handler service (wrap-duplex-stream stream) info))
+        (service-handler service (wrap-duplex-stream stream) info send-recv-timeout))
       {:port port
        :pipeline-transform #(.addFirst % "framer" (frame-decorder))})
     (let [join-mgr (start-join-manager registrar-source

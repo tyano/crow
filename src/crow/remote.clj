@@ -7,61 +7,57 @@
             [crow.discovery :refer [discover service-finder]]
             [crow.logging :refer [debug-pr]]
             [clojure.tools.logging :as log]
-            [slingshot.slingshot :refer [throw+]])
-  (:import [manifold.deferred Recur]))
+            [slingshot.slingshot :refer [try+ throw+]]
+            [schema.core :as s])
+  (:import [manifold.deferred Recur]
+           [crow.request ConnectionError]))
 
 (def ^:dynamic *retry-interval* 3000)
 
+(defrecord CallDescription [target-ns fn-name args])
+
 (defn invoke
-  [{:keys [address port] :as service} target-ns fn-name & args]
-  (let [ch  (chan)
-        msg (remote-call target-ns fn-name args)
-        timeout-ms request/*send-recv-timeout*]
-    (thread
-      (try
-        (binding [request/*send-recv-timeout* timeout-ms]
-          (let [result
-                  (loop [retry-count 3]
-                    (if (= retry-count 0)
-                      (throw (IllegalStateException. "retry timeout!!"))
-                      (let [msg @(send address port msg)]
-                        (cond
-                          (false? msg) ; Could'nt send. retry
-                          (do
-                            (Thread/sleep *retry-interval*)
-                            (log/debug (str "RETRY! - remaining retry count : " (dec retry-count)))
-                            (recur (dec retry-count)))
+  [ch timeout-ms {:keys [address port] :as service} {:keys [target-ns fn-name args] :as call-description}]
+  (let [msg (remote-call target-ns fn-name args)]
+    (-> (send address port msg timeout-ms)
+      (chain
+        (fn [msg]
+          (cond
+            (false? msg) ; Could'nt send.
+            (do
+              (log/debug "Couldn't send. maybe couldn't connnect to pear.")
+              request/connect-failed)
 
-                          (protocol-error? msg)
-                          (throw+ {:type :protocol-error, :error-code (:error-code msg), :message (:message msg)})
+            (protocol-error? msg)
+            (throw+ {:type :protocol-error, :error-code (:error-code msg), :message (:message msg)})
 
-                          (call-exception? msg)
-                          (let [type-str    (:type msg)
-                                stack-trace (:stack-trace msg)]
-                            (throw+ {:type (keyword type-str)} stack-trace))
+            (call-exception? msg)
+            (let [type-str    (:type msg)
+                  stack-trace (:stack-trace msg)]
+              (throw+ {:type (keyword type-str)} stack-trace))
 
-                          (call-result? msg)
-                          (:obj msg)
+            (call-result? msg)
+            (:obj msg)
 
-                          :crow.request/timeout
-                          (do
-                            (Thread/sleep *retry-interval*)
-                            (log/debug (str "RETRY! - remaining retry count : " (dec retry-count)))
-                            (recur (dec retry-count)))
+            (= request/timeout msg)
+            msg
 
-                          :crow.request/drained
-                          (do
-                            (log/debug "DRAINED!")
-                            nil)
+            (= request/drained msg)
+            (do
+              (log/debug "DRAINED!")
+              nil)
 
-                          :else
-                          (throw (IllegalStateException. (str "No such message format: " (pr-str msg))))))))]
+            :else
+            (throw (IllegalStateException. (str "No such message format: " (pr-str msg))))))
+        (fn [msg']
           (try
-            (when-not (nil? result)
-              (>!! ch result))
+            (when-not (nil? msg')
+              (>!! ch msg'))
             (finally
               (close! ch)))))
-        (catch Throwable th
+
+      (d/catch
+        (fn [th]
           (>!! ch th))))
     ch))
 
@@ -80,35 +76,32 @@
   [finder & expr]
   `(with-finder-fn ~finder (fn [] ~@expr)))
 
-(defn set-default-timeout-ms!
-  [timeout]
-  (alter-var-root #'request/*send-recv-timeout* (fn [_] timeout)))
+(def DiscoveryOptions {(s/optional-key :timeout-ms) s/Num})
 
-(defn with-timeout-fn
-  [timeout f]
-  (binding [request/*send-recv-timeout* timeout]
-    (f)))
-
-(defmacro with-timeout
-  [timeout & expr]
-  `(with-timeout-fn ~timeout (fn [] ~@expr)))
-
-(defn find-service
-  [service-name attrs]
+(def Service {:address s/Str , :port s/Num, s/Keyword s/Any})
+(s/defn find-service :- [Service]
+  [service-name :- s/Str
+   attrs        :- {s/Keyword s/Any}
+   options      :- DiscoveryOptions]
   (when-not *default-finder*
     (throw+ {:type :finder-not-found, :message "ServiceFinder doesn't exist! You must start a service finder by start-service-finder at first!"}))
-  (discover *default-finder* service-name attrs))
+  (discover *default-finder* service-name attrs options))
 
-(defn invoke-with-service-finder
-  [service-name attributes target-ns fn-name & args]
-  (if-let [services (seq (find-service service-name attributes))]
-    (apply invoke (first (shuffle services)) target-ns fn-name args)
+(s/defn invoke-with-service-finder :- s/Any
+  [ch
+   timeout-ms   :- s/Num
+   service-name :- s/Str
+   attributes   :- {s/Keyword s/Any}
+   call-desc    :- CallDescription]
+  (if-let [services (seq (find-service service-name attributes {:timeout-ms timeout-ms}))]
+    (let [service (first (shuffle services))]
+      (invoke ch timeout-ms service call-desc))
     (throw (IllegalStateException. (format "Service Not Found: service-name=%s, attributes=%s"
                                       service-name
                                       (pr-str attributes))))))
 
 (defmacro async
-  ([call-list]
+  ([ch timeout-ms call-list]
    (let [namespace-fn (first call-list)
          namespace-str (str namespace-fn)
          ns-fn-coll (clojure.string/split (str namespace-fn) #"/")
@@ -117,8 +110,12 @@
          args (rest call-list)]
      `(do
         (debug-pr "remote call: " ~namespace-str)
-        (invoke-with-service-finder ~target-ns {} ~target-ns ~fn-name ~@args))))
-  ([service-namespace attributes call-list]
+        (invoke-with-service-finder ~ch ~timeout-ms ~target-ns {} (CallDescription. ~target-ns ~fn-name [~@args])))))
+
+  ([timeout-ms call-list]
+    `(async (chan) ~timeout-ms ~call-list))
+
+  ([ch timeout-ms service-namespace attributes call-list]
    (let [service-name (name service-namespace)
          namespace-fn (first call-list)
          namespace-str (str namespace-fn)
@@ -128,7 +125,10 @@
          args (rest call-list)]
      `(do
         (debug-pr "remote call: " ~namespace-str)
-        (invoke-with-service-finder ~service-name ~attributes ~target-ns ~fn-name ~@args)))))
+        (invoke-with-service-finder ~ch ~timeout-ms ~service-name ~attributes (CallDescription. ~target-ns ~fn-name [~@args])))))
+
+  ([timeout-ms service-namespace attributes call-list]
+    `(async (chan) ~timeout-ms ~service-namespace ~attributes ~call-list)))
 
 (defn <!!+
   "read a channel and if the result value is an instance of
@@ -140,25 +140,89 @@
   (when ch
     ;; if no data is supplied to ch until 4* msecs of *send-receive-timeout*,
     ;; it should be a bug... (because invoke will retry only 3 times)
-    (let [timeout-ch (timeout (+ (* request/*send-recv-timeout* 4) (* *retry-interval* 4)))
-          [result c] (alts!! [ch timeout-ch])]
-      (if (= c timeout-ch)
-        (throw+ {:type :channel-read-timeout})
-        (if (instance? Throwable result)
-          (throw result)
-          result)))))
+    (let [result (<!! ch)]
+      (cond
+        (instance? Throwable result)
+        (throw result)
 
+        (instance? ConnectionError result)
+        (throw+ result)
+
+        :else
+        result))))
+
+(defmacro call-remote
+  ([ch timeout-ms call-list]
+    `(<!!+ (async ~ch ~timeout-ms ~call-list)))
+  ([ch timeout-ms service-namespace attributes call-list]
+    `(<!!+ (async ~ch ~timeout-ms ~service-namespace ~attributes ~call-list))))
+
+(defmacro make-call-fn
+  ([ch timeout-ms call-list]
+    `(fn []
+        (try+
+          (call-remote ~ch ~timeout-ms ~call-list)
+          (catch ConnectionError {:keys [type]}
+            type))))
+
+  ([ch timeout-ms service-namespace attributes call-list]
+    `(fn []
+        (try+
+          (call-remote ~ch ~timeout-ms ~service-namespace ~attributes ~call-list)
+          (catch ConnectionError {:keys [type]}
+            type)))))
 
 (defmacro call
-  ([call-list]
-    `(<!!+ (async ~call-list)))
-  ([service-namespace attributes call-list]
-    `(<!!+ (async ~service-namespace ~attributes ~call-list))))
+  ([ch call-list {:keys [timeout-ms retry-count base-retry-interval-ms]
+                  :or [timeout-ms Long/MAX_VALUE retry-count 3 base-retry-interval-ms 2000]}]
+    `(let [call-fn# (make-call-fn ~ch ~timeout-ms ~call-list)]
+        (loop [result# (call-fn#) retry# ~retry-count interval# ~base-retry-interval-ms]
+          (cond
+            (zero? retry#)
+            result#
+
+            (or (= :timeout result#) (= :connect-failed result#))
+            (do
+              (Thread/sleep interval#)
+              (recur (call-fn#) (dec retry#) (* interval# 2)))
+
+            :else
+            result#))))
+
+  ([call-list {:keys [timeout-ms retry-count base-retry-interval-ms]
+               :or [timeout-ms Long/MAX_VALUE retry-count 3 base-retry-interval-ms 2000]}]
+    `(call (chan) ~call-list
+        {:timeout-ms ~timeout-ms
+         :retry-count ~retry-count
+         :base-retry-interval-ms ~base-retry-interval-ms}))
+
+  ([ch service-namespace attributes call-list {:keys [timeout-ms retry-count base-retry-interval-ms]
+                                               :or [timeout-ms Long/MAX_VALUE retry-count 3 base-retry-interval-ms 2000]}]
+    `(let [call-fn# (make-call-fn ~ch ~timeout-ms ~service-namespace ~attributes ~call-list)]
+        (loop [result# (call-fn#) retry# ~retry-count interval# ~base-retry-interval-ms]
+          (cond
+            (zero? retry#)
+            result#
+
+            (or (= :timeout result#) (= :connect-failed result#))
+            (do
+              (Thread/sleep interval#)
+              (recur (call-fn#) (dec retry#) (* interval# 2)))
+
+            :else
+            result#))))
+
+  ([service-namespace attributes call-list {:keys [timeout-ms retry-count base-retry-interval-ms]
+                                            :or [timeout-ms Long/MAX_VALUE retry-count 3 base-retry-interval-ms 2000]}]
+    `(call (chan) ~service-namespace ~attributes ~call-list
+        {:timeout-ms ~timeout-ms
+         :retry-count ~retry-count
+         :base-retry-interval-ms ~base-retry-interval-ms})))
 
 (defn current-finder [] *default-finder*)
 
 (defmacro with-service
-  ([service call-list]
+  ([ch service call-list {:keys [timeout-ms] :or {timeout-ms Long/MAX_VALUE}}]
    (let [namespace-fn (first call-list)
          namespace-str (str namespace-fn)
          ns-fn-coll (clojure.string/split (str namespace-fn) #"/")
@@ -167,7 +231,10 @@
          args (rest call-list)]
      `(do
         (debug-pr "remote call: " ~namespace-str)
-        (invoke ~service ~target-ns ~fn-name ~@args)))))
+        (invoke ~ch ~timeout-ms ~service ~target-ns ~fn-name ~@args))))
+
+  ([service call-list {:keys [timeout-ms] :or {timeout-ms Long/MAX_VALUE}}]
+    `(with-service (chan) ~service ~call-list {:timeout-ms ~timeout-ms})))
 
 
 

@@ -1,7 +1,7 @@
 (ns crow.discovery
   (:refer-clojure :exclude [send])
   (:require [crow.protocol :refer [discovery service-found? service-not-found? ping ack? call-exception?]]
-            [crow.request :refer [send]]
+            [crow.request :refer [send] :as request]
             [crow.registrar-source :as source]
             [crow.service :as service]
             [crow.request :as request]
@@ -66,9 +66,9 @@
       other-reg)))
 
 (defn- discover-with
-  [finder {:keys [address port] :as registrar} service-name attribute]
+  [finder {:keys [address port] :as registrar} service-name attribute {:keys [timeout-ms] :or [timeout-ms Long/MAX_VALUE] :as options}]
   (let [req     (discovery service-name attribute)
-        result  @(-> (request/send address port req)
+        result  @(-> (request/send address port req timeout-ms)
                      (chain
                        (fn [msg]
                          (cond
@@ -88,10 +88,10 @@
                                  stack-trace (:stack-trace msg)]
                              (throw+ {:type (keyword type-str), :stack-trace stack-trace}))
 
-                           (= :crow.request/timeout msg)
+                           (= request/timeout msg)
                            nil
 
-                           (= :crow.request/drained msg)
+                           (= request/drained msg)
                            nil
 
                            :else
@@ -106,7 +106,7 @@
       result)))
 
 (defn discover
-  [finder service-name attribute]
+  [finder service-name attribute options]
   (when-not (seq @(:active-registrars finder))
     (reset-registrars! finder))
   (if-let [registrars (seq @(:active-registrars finder))]
@@ -115,6 +115,6 @@
         result result
         (not (seq regs)) (throw+ {:type ::service-not-found, :source (:registrar-source finder)})
         :else (let [reg (first regs)]
-                (recur (rest regs) (discover-with finder reg service-name attribute)))))
+                (recur (rest regs) (discover-with finder reg service-name attribute options)))))
     (throw+ {:type ::registrar-doesnt-exist, :source (:registrar-source finder)})))
 

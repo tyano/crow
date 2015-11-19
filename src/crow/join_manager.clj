@@ -100,10 +100,10 @@
 
 (defn- join-service!
   "send a join request to a registrar and get a new service-id"
-  [join-mgr service {:keys [address port] :as registrar}]
+  [join-mgr service {:keys [address port] :as registrar} timeout-ms]
   (log/debug "Joinning" (pr-str service) "to" (pr-str registrar))
   (let [req (join-request (:address service) (:port service) (service-id service) (:name service) (:attributes service))]
-    (-> (request/send address port req)
+    (-> (request/send address port req timeout-ms)
         (chain
           (fn [msg]
             (cond
@@ -126,9 +126,9 @@
 (declare join)
 
 (defn- send-heart-beat!
-  [join-mgr service {:keys [address port expire-at], :as registrar}]
+  [join-mgr service {:keys [address port expire-at], :as registrar} timeout-ms]
   (let [req (heart-beat (service-id service))]
-    (-> (request/send address port req)
+    (-> (request/send address port req timeout-ms)
         (chain
           (fn [msg]
             (cond
@@ -166,7 +166,7 @@
       (registrars registrar))))
 
 (defn- run-join-processor
-  [join-mgr join-ch]
+  [join-mgr join-ch timeout-ms]
   (go-loop []
     (if @should-stop
       (log/info "join-processor stopped.")
@@ -174,7 +174,7 @@
         (try
           (let [{:keys [service registrar], :as join-info} (<! join-ch)]
             (when (seq join-info)
-              (-> (join-service! join-mgr service registrar)
+              (-> (join-service! join-mgr service registrar timeout-ms)
                   (d/catch
                     #(log/error % "An exception occured when joining.")))))
           (catch Throwable e
@@ -216,7 +216,7 @@
           (recur))))))
 
 (defn- run-heart-beat-processor
-  [join-mgr heart-beat-buffer-ms]
+  [join-mgr heart-beat-buffer-ms timeout-ms]
   (thread
     (loop []
       (if @should-stop
@@ -230,7 +230,7 @@
                               :when (after? (plus (now) (millis heart-beat-buffer-ms)) expire-at)]
                           [service reg]))]
               (log/trace "send heart-beat from" (pr-str service) "to" (pr-str reg))
-              (-> (send-heart-beat! join-mgr service reg)
+              (-> (send-heart-beat! join-mgr service reg timeout-ms)
                   (d/catch
                     #(log/error % "Could not send heart-beat to " (pr-str reg)))))
             (Thread/sleep 500)
@@ -254,7 +254,7 @@
           (recur))))))
 
 (defn- run-dead-registrar-checker
-  [join-mgr dead-registrar-check-interval]
+  [join-mgr dead-registrar-check-interval timeout-ms]
   (thread
     (loop []
       (if @should-stop
@@ -263,7 +263,7 @@
           (try
             (doseq [{:keys [address port] :as registrar} @(:dead-registrars join-mgr)]
               (let [req (ping)]
-                @(chain (request/send address port req)
+                @(chain (request/send address port req timeout-ms)
                   (fn [resp]
                     (cond
                       (ack? resp)
@@ -282,16 +282,16 @@
           (recur))))))
 
 (defn start-join-manager
-  [registrar-source fetch-registrar-interval-ms dead-registrar-check-interval heart-beat-buffer-ms rejoin-interval-ms]
+  [registrar-source fetch-registrar-interval-ms dead-registrar-check-interval heart-beat-buffer-ms rejoin-interval-ms & {:keys [send-recv-timeout-ms] :or {send-recv-timeout-ms nil}}]
   (let [service-ch (chan)
         join-ch    (chan)
         join-mgr   (join-manager)]
     (run-registrar-fetcher join-mgr registrar-source fetch-registrar-interval-ms)
     (run-service-acceptor join-mgr service-ch join-ch)
-    (run-join-processor join-mgr join-ch)
-    (run-heart-beat-processor join-mgr heart-beat-buffer-ms)
+    (run-join-processor join-mgr join-ch send-recv-timeout-ms)
+    (run-heart-beat-processor join-mgr heart-beat-buffer-ms send-recv-timeout-ms)
     (run-join-to-expired-registrar join-mgr service-ch rejoin-interval-ms)
-    (run-dead-registrar-checker join-mgr dead-registrar-check-interval)
+    (run-dead-registrar-checker join-mgr dead-registrar-check-interval send-recv-timeout-ms)
     service-ch))
 
 (defn join

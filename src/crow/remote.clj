@@ -14,10 +14,30 @@
 
 (def ^:dynamic *retry-interval* 3000)
 
-(defrecord CallDescription [target-ns fn-name args])
+(s/defrecord ServiceDescriptor
+  [service-name :- s/Str
+   attributes   :- {s/Keyword s/Any}])
 
-(defn invoke
-  [ch timeout-ms {:keys [address port] :as service} {:keys [target-ns fn-name args] :as call-description}]
+(s/defrecord CallDescriptor
+  [target-ns      :- s/Str
+   fn-name        :- s/Str
+   args           :- (s/maybe [s/Any])])
+
+(def DiscoveryOptions {(s/optional-key :timeout-ms) s/Num
+                       s/Keyword s/Any})
+
+(def Service {:address  s/Str
+              :port     s/Num
+              s/Keyword s/Any})
+
+(def CallOptions {(s/optional-key :timeout-ms) s/Num
+                  s/Keyword s/Any})
+
+(s/defn invoke
+  [ch
+   timeout-ms :- (s/maybe s/Num)
+   {:keys [address port] :as service} :- Service
+   {:keys [target-ns fn-name args]} :- CallDescriptor]
   (let [msg (remote-call target-ns fn-name args)]
     (-> (send address port msg timeout-ms)
       (chain
@@ -76,59 +96,64 @@
   [finder & expr]
   `(with-finder-fn ~finder (fn [] ~@expr)))
 
-(def DiscoveryOptions {(s/optional-key :timeout-ms) s/Num})
-
-(def Service {:address s/Str , :port s/Num, s/Keyword s/Any})
 (s/defn find-service :- [Service]
-  [service-name :- s/Str
-   attrs        :- {s/Keyword s/Any}
+  [{:keys [service-name attributes]} :- ServiceDescriptor
    options      :- DiscoveryOptions]
   (when-not *default-finder*
     (throw+ {:type :finder-not-found, :message "ServiceFinder doesn't exist! You must start a service finder by start-service-finder at first!"}))
-  (discover *default-finder* service-name attrs options))
+  (discover *default-finder* service-name attributes options))
 
-(s/defn invoke-with-service-finder :- s/Any
+(s/defn async-fn :- s/Any
   [ch
-   timeout-ms   :- s/Num
-   service-name :- s/Str
-   attributes   :- {s/Keyword s/Any}
-   call-desc    :- CallDescription]
-  (if-let [services (seq (find-service service-name attributes {:timeout-ms timeout-ms}))]
+   service-desc :- ServiceDescriptor
+   call-desc    :- CallDescriptor
+   options      :- CallOptions]
+  (debug-pr (str "remote call. service: " (pr-str service-desc) ", fn: " (pr-str call-desc)))
+  (if-let [services (seq (find-service service-desc options))]
     (let [service (first (shuffle services))]
-      (invoke ch timeout-ms service call-desc))
+      (invoke ch (:timeout-ms options) service call-desc))
     (throw (IllegalStateException. (format "Service Not Found: service-name=%s, attributes=%s"
-                                      service-name
-                                      (pr-str attributes))))))
+                                      (:service-name service-desc)
+                                      (pr-str (:attributes service-desc)))))))
+
+(defmacro parse-call-list
+  ([call-list]
+    (let [namespace-fn (first call-list)
+          namespace-str (str namespace-fn)
+          ns-fn-coll (clojure.string/split (str namespace-fn) #"/")
+          target-ns (first ns-fn-coll)
+          fn-name (last ns-fn-coll)
+          args (rest call-list)]
+      `(vector
+          (ServiceDescriptor. ~target-ns {})
+          (CallDescriptor. ~target-ns ~fn-name [~@args]))))
+
+  ([service-namespace attributes call-list]
+    (let [service-name (name service-namespace)
+          namespace-fn (first call-list)
+          namespace-str (str namespace-fn)
+          ns-fn-coll (clojure.string/split (str namespace-fn) #"/")
+          target-ns (first ns-fn-coll)
+          fn-name (last ns-fn-coll)
+          args (rest call-list)]
+      `(vector
+          (ServiceDescriptor. ~service-name ~attributes)
+          (CallDescriptor. ~target-ns ~fn-name [~@args])))))
 
 (defmacro async
-  ([ch timeout-ms call-list]
-   (let [namespace-fn (first call-list)
-         namespace-str (str namespace-fn)
-         ns-fn-coll (clojure.string/split (str namespace-fn) #"/")
-         target-ns (first ns-fn-coll)
-         fn-name (last ns-fn-coll)
-         args (rest call-list)]
-     `(do
-        (debug-pr "remote call: " ~namespace-str)
-        (invoke-with-service-finder ~ch ~timeout-ms ~target-ns {} (CallDescription. ~target-ns ~fn-name [~@args])))))
+  ([ch call-list options]
+   `(let [[service-desc# call-desc#] (parse-call-list ~call-list)]
+      (async-fn ~ch service-desc# call-desc# ~options)))
 
-  ([timeout-ms call-list]
-    `(async (chan) ~timeout-ms ~call-list))
+  ([call-list options]
+    `(async (chan) ~call-list ~options))
 
-  ([ch timeout-ms service-namespace attributes call-list]
-   (let [service-name (name service-namespace)
-         namespace-fn (first call-list)
-         namespace-str (str namespace-fn)
-         ns-fn-coll (clojure.string/split (str namespace-fn) #"/")
-         target-ns (first ns-fn-coll)
-         fn-name (last ns-fn-coll)
-         args (rest call-list)]
-     `(do
-        (debug-pr "remote call: " ~namespace-str)
-        (invoke-with-service-finder ~ch ~timeout-ms ~service-name ~attributes (CallDescription. ~target-ns ~fn-name [~@args])))))
+  ([ch service-namespace attributes call-list options]
+   `(let [[service-desc# call-desc#] (parse-call-list ~service-namespace ~attributes ~call-list)]
+      (async-fn ~ch service-desc# call-desc# ~options)))
 
-  ([timeout-ms service-namespace attributes call-list]
-    `(async (chan) ~timeout-ms ~service-namespace ~attributes ~call-list)))
+  ([service-namespace attributes call-list options]
+    `(async (chan) ~service-namespace ~attributes ~call-list ~options)))
 
 (defn <!!+
   "read a channel and if the result value is an instance of
@@ -151,90 +176,70 @@
         :else
         result))))
 
-(defmacro call-remote
-  ([ch timeout-ms call-list]
-    `(<!!+ (async ~ch ~timeout-ms ~call-list)))
-  ([ch timeout-ms service-namespace attributes call-list]
-    `(<!!+ (async ~ch ~timeout-ms ~service-namespace ~attributes ~call-list))))
+(s/defn call-fn
+  [ch
+   service-desc :- ServiceDescriptor
+   call-desc :- CallDescriptor
+   options   :- CallOptions]
+   (<!!+ (async-fn ch service-desc call-desc options)))
 
-(defmacro make-call-fn
-  ([ch timeout-ms call-list]
-    `(fn []
-        (try+
-          (call-remote ~ch ~timeout-ms ~call-list)
-          (catch ConnectionError {:keys [type]}
-            type))))
+(s/defn ^:private make-call-fn
+  [ch
+   service-desc :- ServiceDescriptor
+   call-desc :- CallDescriptor
+   options :- CallOptions]
+  (fn []
+    (try+
+      (call-fn ch service-desc call-desc options)
+      (catch ConnectionError e e))))
 
-  ([ch timeout-ms service-namespace attributes call-list]
-    `(fn []
-        (try+
-          (call-remote ~ch ~timeout-ms ~service-namespace ~attributes ~call-list)
-          (catch ConnectionError {:keys [type]}
-            type)))))
+(s/defn try-call
+  [ch
+   service-desc :- ServiceDescriptor
+   call-desc :- CallDescriptor
+   {:keys [retry-count base-retry-interval-ms]
+    :or [retry-count 3 base-retry-interval-ms 2000] :as options} :- CallOptions]
+  (let [call-fn (make-call-fn ch service-desc call-desc options)]
+    (loop [result (call-fn) retry retry-count interval base-retry-interval-ms]
+      (cond
+        (and (instance? ConnectionError result)
+          (or (= :timeout (:type result)) (= :connect-failed (:type result))))
+        (let [new-retry (debug-pr "RETRY! " (dec retry))]
+          (if (zero? new-retry)
+            (if (instance? ConnectionError result)
+              (throw+ {:type (:type result)})
+              result)
+            (do
+              (Thread/sleep interval)
+              (recur (call-fn) new-retry (* interval 2)))))
+
+        :else
+        result))))
 
 (defmacro call
-  ([ch call-list {:keys [timeout-ms retry-count base-retry-interval-ms]
-                  :or [timeout-ms Long/MAX_VALUE retry-count 3 base-retry-interval-ms 2000]}]
-    `(let [call-fn# (make-call-fn ~ch ~timeout-ms ~call-list)]
-        (loop [result# (call-fn#) retry# ~retry-count interval# ~base-retry-interval-ms]
-          (cond
-            (zero? retry#)
-            result#
+  ([ch call-list opts]
+    `(let [[service-desc# call-desc#] (parse-call-list ~call-list)]
+        (try-call ~ch service-desc# call-desc# ~opts)))
 
-            (or (= :timeout result#) (= :connect-failed result#))
-            (do
-              (Thread/sleep interval#)
-              (recur (call-fn#) (dec retry#) (* interval# 2)))
+  ([call-list opts]
+    `(call (chan) ~call-list ~opts))
 
-            :else
-            result#))))
+  ([ch service-namespace attributes call-list opts]
+    `(let [[service-desc# call-desc#] (parse-call-list ~service-namespace ~attributes ~call-list)]
+        (try-call ~ch service-desc# call-desc# ~opts)))
 
-  ([call-list {:keys [timeout-ms retry-count base-retry-interval-ms]
-               :or [timeout-ms Long/MAX_VALUE retry-count 3 base-retry-interval-ms 2000]}]
-    `(call (chan) ~call-list
-        {:timeout-ms ~timeout-ms
-         :retry-count ~retry-count
-         :base-retry-interval-ms ~base-retry-interval-ms}))
-
-  ([ch service-namespace attributes call-list {:keys [timeout-ms retry-count base-retry-interval-ms]
-                                               :or [timeout-ms Long/MAX_VALUE retry-count 3 base-retry-interval-ms 2000]}]
-    `(let [call-fn# (make-call-fn ~ch ~timeout-ms ~service-namespace ~attributes ~call-list)]
-        (loop [result# (call-fn#) retry# ~retry-count interval# ~base-retry-interval-ms]
-          (cond
-            (zero? retry#)
-            result#
-
-            (or (= :timeout result#) (= :connect-failed result#))
-            (do
-              (Thread/sleep interval#)
-              (recur (call-fn#) (dec retry#) (* interval# 2)))
-
-            :else
-            result#))))
-
-  ([service-namespace attributes call-list {:keys [timeout-ms retry-count base-retry-interval-ms]
-                                            :or [timeout-ms Long/MAX_VALUE retry-count 3 base-retry-interval-ms 2000]}]
-    `(call (chan) ~service-namespace ~attributes ~call-list
-        {:timeout-ms ~timeout-ms
-         :retry-count ~retry-count
-         :base-retry-interval-ms ~base-retry-interval-ms})))
+  ([service-namespace attributes call-list opts]
+    `(call (chan) ~service-namespace ~attributes ~call-list ~opts)))
 
 (defn current-finder [] *default-finder*)
 
 (defmacro with-service
-  ([ch service call-list {:keys [timeout-ms] :or {timeout-ms Long/MAX_VALUE}}]
-   (let [namespace-fn (first call-list)
-         namespace-str (str namespace-fn)
-         ns-fn-coll (clojure.string/split (str namespace-fn) #"/")
-         target-ns (first ns-fn-coll)
-         fn-name (last ns-fn-coll)
-         args (rest call-list)]
-     `(do
-        (debug-pr "remote call: " ~namespace-str)
-        (invoke ~ch ~timeout-ms ~service ~target-ns ~fn-name ~@args))))
+  ([ch service call-list opts]
+   `(let [[_ call-desc#] (parse-call-list ~call-list)]
+      (invoke ~ch (:timeout-ms ~opts) ~service call-desc#)))
 
-  ([service call-list {:keys [timeout-ms] :or {timeout-ms Long/MAX_VALUE}}]
-    `(with-service (chan) ~service ~call-list {:timeout-ms ~timeout-ms})))
+  ([service call-list opts]
+    `(with-service (chan) ~service ~call-list ~opts)))
 
 
 

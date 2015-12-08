@@ -123,10 +123,10 @@
           ns-fn-coll (clojure.string/split (str namespace-fn) #"/")
           target-ns (first ns-fn-coll)
           fn-name (last ns-fn-coll)
-          args (rest call-list)]
+          args (vec (rest call-list))]
       `(vector
           (ServiceDescriptor. ~target-ns {})
-          (CallDescriptor. ~target-ns ~fn-name [~@args]))))
+          (CallDescriptor. ~target-ns ~fn-name ~args))))
 
   ([service-namespace attributes call-list]
     (let [service-name (name service-namespace)
@@ -135,10 +135,10 @@
           ns-fn-coll (clojure.string/split (str namespace-fn) #"/")
           target-ns (first ns-fn-coll)
           fn-name (last ns-fn-coll)
-          args (rest call-list)]
+          args (vec (rest call-list))]
       `(vector
           (ServiceDescriptor. ~service-name ~attributes)
-          (CallDescriptor. ~target-ns ~fn-name [~@args])))))
+          (CallDescriptor. ~target-ns ~fn-name ~args)))))
 
 (defmacro async
   ([ch call-list options]
@@ -146,14 +146,14 @@
       (async-fn ~ch service-desc# call-desc# ~options)))
 
   ([call-list options]
-    `(async (chan) ~call-list ~options))
+    `(async (chan 1) ~call-list ~options))
 
   ([ch service-namespace attributes call-list options]
    `(let [[service-desc# call-desc#] (parse-call-list ~service-namespace ~attributes ~call-list)]
       (async-fn ~ch service-desc# call-desc# ~options)))
 
   ([service-namespace attributes call-list options]
-    `(async (chan) ~service-namespace ~attributes ~call-list ~options)))
+    `(async (chan 1) ~service-namespace ~attributes ~call-list ~options)))
 
 (defn <!!+
   "read a channel and if the result value is an instance of
@@ -222,14 +222,14 @@
         (try-call ~ch service-desc# call-desc# ~opts)))
 
   ([call-list opts]
-    `(call (chan) ~call-list ~opts))
+    `(call (chan 1) ~call-list ~opts))
 
   ([ch service-namespace attributes call-list opts]
     `(let [[service-desc# call-desc#] (parse-call-list ~service-namespace ~attributes ~call-list)]
         (try-call ~ch service-desc# call-desc# ~opts)))
 
   ([service-namespace attributes call-list opts]
-    `(call (chan) ~service-namespace ~attributes ~call-list ~opts)))
+    `(call (chan 1) ~service-namespace ~attributes ~call-list ~opts)))
 
 (defn current-finder [] *default-finder*)
 
@@ -239,7 +239,7 @@
       (invoke ~ch (:timeout-ms ~opts) ~service call-desc#)))
 
   ([service call-list opts]
-    `(with-service (chan) ~service ~call-list ~opts)))
+    `(with-service (chan 1) ~service ~call-list ~opts)))
 
 
 

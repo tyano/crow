@@ -16,7 +16,7 @@
 
 (s/defrecord ServiceDescriptor
   [service-name :- s/Str
-   attributes   :- {s/Keyword s/Any}])
+   attributes   :- (s/maybe {s/Keyword s/Any})])
 
 (s/defrecord CallDescriptor
   [target-ns      :- s/Str

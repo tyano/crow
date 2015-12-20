@@ -10,7 +10,7 @@
             [manifold.deferred :refer [let-flow chain] :as d]
             [clojure.tools.logging :as log]
             [slingshot.slingshot :refer [throw+]]
-            [clojure.core.async :refer [thread]]
+            [clojure.core.async :refer [thread go-loop timeout <!]]
             [crow.logging :refer [trace-pr info-pr]]))
 
 (def ^:dynamic *dead-registrar-check-interval-ms* 30000)
@@ -23,23 +23,23 @@
 ;;; add it into active-registrars.
 (defn- start-check-dead-registrars-task
   [finder]
-  (thread
-    (while true
-      (let [current-dead-registrars @(:dead-registrars finder)]
-        (doseq [{:keys [address port] :as registrar} current-dead-registrars]
-          (try
-            (trace-pr "checking: " registrar)
-            (let [msg @(send address port (ping))]
-              (if (ack? msg)
-                (do
-                  (info-pr "registrar revived: " registrar)
-                  (dosync
-                    (alter (:dead-registrars finder) disj registrar)
-                    (alter (:active-registrars finder) conj registrar)))
-                (log/error (str "Invalid response:" msg))))
-            (catch Throwable e
-              (log/debug e))))
-        (Thread/sleep *dead-registrar-check-interval-ms*)))))
+  (go-loop []
+    (let [current-dead-registrars @(:dead-registrars finder)]
+      (doseq [{:keys [address port] :as registrar} current-dead-registrars]
+        (try
+          (trace-pr "checking: " registrar)
+          (let [msg @(send address port (ping))]
+            (if (ack? msg)
+              (do
+                (info-pr "registrar revived: " registrar)
+                (dosync
+                  (alter (:dead-registrars finder) disj registrar)
+                  (alter (:active-registrars finder) conj registrar)))
+              (log/error (str "Invalid response:" msg))))
+          (catch Throwable e
+            (log/debug e))))
+      (<! (timeout *dead-registrar-check-interval-ms*))
+      (recur))))
 
 (defrecord ServiceFinder [registrar-source active-registrars dead-registrars])
 

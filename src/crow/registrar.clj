@@ -8,7 +8,7 @@
                                    protocol-error ack call-exception
                                    service-found service-not-found] :as p]
             [crow.request :refer [frame-decorder wrap-duplex-stream format-stack-trace] :as request]
-            [clojure.core.async :refer [go-loop chan <! onto-chan thread]]
+            [clojure.core.async :refer [go-loop chan <! onto-chan timeout]]
             [crow.service :as sv]
             [clojure.tools.logging :as log]
             [crow.logging :refer [trace-pr debug-pr info-pr]]
@@ -75,6 +75,7 @@
 (defn- check-expiration
   [registrar ch]
   (go-loop []
+    (log/trace "check-expiration")
     (let [[service-id service-info] (<! ch)]
       (when (after? (now) (:expire-at service-info))
         (info-pr "service expired:" service-info)
@@ -83,12 +84,12 @@
 
 (defn- watch-services
   [registrar ch]
-  (thread
-    (loop []
-      (when (seq @(:services registrar))
-        (onto-chan ch @(:services registrar) false))
-      (Thread/sleep (:watch-interval registrar))
-      (recur))))
+  (go-loop []
+    (log/trace "watch-services")
+    (when (seq @(:services registrar))
+      (onto-chan ch @(:services registrar) false))
+    (<! (timeout (:watch-interval registrar)))
+    (recur)))
 
 (defn process-registrar
   [registrar]

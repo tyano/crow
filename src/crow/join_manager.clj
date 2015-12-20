@@ -6,7 +6,7 @@
             [crow.registrar-source :as source]
             [crow.request :as request]
             [crow.id-store :refer [write]]
-            [clojure.core.async :refer [chan thread go-loop <! >!! onto-chan] :as async]
+            [clojure.core.async :refer [chan go-loop <! timeout >!! onto-chan] :as async]
             [clojure.set :refer [difference select] :as st]
             [slingshot.slingshot :refer [throw+]]
             [clojure.tools.logging :as log]
@@ -201,85 +201,81 @@
 
 (defn- run-registrar-fetcher
   [join-mgr registrar-source fetch-registrar-interval-ms]
-  (thread
-    (loop []
-      (if @should-stop
-        (log/info "registrar-fetcher stopped.")
-        (do
-          (try
-            (log/trace "Resetting registrars from registrar-source.")
-            (let [registrars (source/registrars registrar-source)]
-              (reset-registrars! join-mgr registrars))
-            (Thread/sleep fetch-registrar-interval-ms)
-            (catch Throwable th
-              (log/error th "registrar-fetcher error.")))
-          (recur))))))
+  (go-loop []
+    (if @should-stop
+      (log/info "registrar-fetcher stopped.")
+      (do
+        (try
+          (log/trace "Resetting registrars from registrar-source.")
+          (let [registrars (source/registrars registrar-source)]
+            (reset-registrars! join-mgr registrars))
+          (<! (timeout fetch-registrar-interval-ms))
+          (catch Throwable th
+            (log/error th "registrar-fetcher error.")))
+        (recur)))))
 
 (defn- run-heart-beat-processor
   [join-mgr heart-beat-buffer-ms timeout-ms]
-  (thread
-    (loop []
-      (if @should-stop
-        (log/info "heart-beat-processor stopped.")
-        (do
-          (try
-            (doseq [[service reg]
-                      (dosync
-                        (for [service @(:managed-services join-mgr)
-                              {:keys [expire-at] :as reg} @(:registrars service)
-                              :when (after? (plus (now) (millis heart-beat-buffer-ms)) expire-at)]
-                          [service reg]))]
-              (log/trace "send heart-beat from" (pr-str service) "to" (pr-str reg))
-              (-> (send-heart-beat! join-mgr service reg timeout-ms)
-                  (d/catch
-                    #(log/error % "Could not send heart-beat to " (pr-str reg)))))
-            (Thread/sleep 500)
+  (go-loop []
+    (if @should-stop
+      (log/info "heart-beat-processor stopped.")
+      (do
+        (try
+          (doseq [[service reg]
+                    (dosync
+                      (for [service @(:managed-services join-mgr)
+                            {:keys [expire-at] :as reg} @(:registrars service)
+                            :when (after? (plus (now) (millis heart-beat-buffer-ms)) expire-at)]
+                        [service reg]))]
+            (log/trace "send heart-beat from" (pr-str service) "to" (pr-str reg))
+            (-> (send-heart-beat! join-mgr service reg timeout-ms)
+                (d/catch
+                  #(log/error % "Could not send heart-beat to " (pr-str reg)))))
+          (<! (timeout 500))
 
-            (catch Throwable th
-              (log/error th "heart-beat-processor error.")))
-          (recur))))))
+          (catch Throwable th
+            (log/error th "heart-beat-processor error.")))
+        (recur)))))
 
 (defn- run-join-to-expired-registrar
   [join-mgr service-ch rejoin-interval-ms]
-  (thread
-    (loop []
-      (if @should-stop
-        (log/info "join-to-expired-registrar stopped.")
-        (do
-          (try
-            (onto-chan service-ch @(:managed-services join-mgr) false)
-            (Thread/sleep rejoin-interval-ms)
-            (catch Throwable e
-              (log/error e "join-to-expired-registrar error.")))
-          (recur))))))
+  (go-loop []
+    (if @should-stop
+      (log/info "join-to-expired-registrar stopped.")
+      (do
+        (try
+          (onto-chan service-ch @(:managed-services join-mgr) false)
+          (<! (timeout rejoin-interval-ms))
+          (catch Throwable e
+            (log/error e "join-to-expired-registrar error.")))
+        (recur)))))
 
 (defn- run-dead-registrar-checker
   [join-mgr dead-registrar-check-interval timeout-ms]
-  (thread
-    (loop []
-      (if @should-stop
-        (log/info "dead-registrar-checker stopped.")
-        (do
-          (try
-            (doseq [{:keys [address port] :as registrar} @(:dead-registrars join-mgr)]
-              (let [req (ping)]
-                @(chain (request/send address port req timeout-ms)
-                  (fn [resp]
-                    (cond
-                      (ack? resp)
-                        (do
-                          (log/info "A registrar revived: " (pr-str registrar))
-                          (registrar-revived! join-mgr registrar))
-                      :else nil)))))
-            (catch Throwable th
-              ;; dead-registrar-checker usually get an error when checking registrars,
-              ;; because the purpose of this thread is accessing to 'dead' registrars for checking
-              ;; it is alive or not. If a registrar is 'dead' yet, the access will cause an error.
-              ;; So if we print the error with ERROR level, verbose error logs will be printed.
-              ;; It should be printed only debugging.
-              (log/debug th "dead-registrar-checker error.")))
-          (Thread/sleep dead-registrar-check-interval)
-          (recur))))))
+  (go-loop []
+    (if @should-stop
+      (log/info "dead-registrar-checker stopped.")
+      (do
+        (try
+          (doseq [{:keys [address port] :as registrar} @(:dead-registrars join-mgr)]
+            (let [req (ping)]
+              @(chain (request/send address port req timeout-ms)
+                (fn [resp]
+                  (cond
+                    (ack? resp)
+                      (do
+                        (log/info "A registrar revived: " (pr-str registrar))
+                        (registrar-revived! join-mgr registrar))
+                    :else nil)))))
+          (catch Throwable th
+            ;; dead-registrar-checker usually get an error when checking registrars,
+            ;; because the purpose of this thread is accessing to 'dead' registrars for checking
+            ;; it is alive or not. If a registrar is 'dead' yet, the access will cause an error.
+            ;; So if we print the error with ERROR level, verbose error logs will be printed.
+            ;; It should be printed only in debugging time.
+            (log/debug th "dead-registrar-checker error.")))
+        (<! (timeout dead-registrar-check-interval))
+        (recur)))))
 
 (defn start-join-manager
   [registrar-source fetch-registrar-interval-ms dead-registrar-check-interval heart-beat-buffer-ms rejoin-interval-ms & {:keys [send-recv-timeout-ms] :or {send-recv-timeout-ms nil}}]

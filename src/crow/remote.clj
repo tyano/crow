@@ -3,7 +3,7 @@
   (:require [crow.protocol :refer [remote-call call-result? call-exception? protocol-error?]]
             [crow.request :refer [send] :as request]
             [manifold.deferred :refer [chain] :as d]
-            [clojure.core.async :refer [>!! chan <!! close! alts!! timeout thread]]
+            [clojure.core.async :refer [>!! chan <!! close!]]
             [crow.discovery :refer [discover service-finder]]
             [crow.logging :refer [debug-pr]]
             [clojure.tools.logging :as log]
@@ -43,7 +43,7 @@
       (chain
         (fn [msg]
           (cond
-            (false? msg) ; Could'nt send.
+            (false? msg) ; Couldn't send.
             (do
               (log/debug "Couldn't send. maybe couldn't connnect to pear.")
               request/connect-failed)

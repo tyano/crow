@@ -96,12 +96,17 @@
   [finder & expr]
   `(with-finder-fn ~finder (fn [] ~@expr)))
 
-(s/defn find-service :- [Service]
+(s/defn find-services :- [Service]
   [{:keys [service-name attributes]} :- ServiceDescriptor
    options      :- DiscoveryOptions]
   (when-not *default-finder*
     (throw+ {:type :finder-not-found, :message "ServiceFinder doesn't exist! You must start a service finder by start-service-finder at first!"}))
   (discover *default-finder* service-name attributes options))
+
+(s/defn find-service :- Service
+  [service-desc :- ServiceDescriptor
+   options      :- DiscoveryOptions]
+  (first (shuffle (find-services service-desc options))))
 
 (s/defn async-fn :- s/Any
   [ch
@@ -109,9 +114,8 @@
    call-desc    :- CallDescriptor
    options      :- CallOptions]
   (debug-pr (str "remote call. service: " (pr-str service-desc) ", fn: " (pr-str call-desc)))
-  (if-let [services (seq (find-service service-desc options))]
-    (let [service (first (shuffle services))]
-      (invoke ch (:timeout-ms options) service call-desc))
+  (if-let [service (find-service service-desc options)]
+    (invoke ch (:timeout-ms options) service call-desc)
     (throw (IllegalStateException. (format "Service Not Found: service-name=%s, attributes=%s"
                                       (:service-name service-desc)
                                       (pr-str (:attributes service-desc)))))))
@@ -235,7 +239,7 @@
 
 (defmacro with-service
   ([ch service call-list opts]
-   `(let [[_ call-desc#] (parse-call-list ~call-list)]
+   `(let [[service-desc# call-desc#] (parse-call-list ~call-list)]
       (invoke ~ch (:timeout-ms ~opts) ~service call-desc#)))
 
   ([service call-list opts]

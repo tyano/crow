@@ -3,8 +3,8 @@
   :url "http://example.com/FIXME"
   :license {:name "Eclipse Public License"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
-  :dependencies [[org.clojure/clojure "1.7.0"]
-                 [aleph "0.4.0"]
+  :dependencies [[org.clojure/clojure "1.8.0"]
+                 [aleph "0.4.1-beta2"]
                  [clojure-msgpack "1.1.2"]
                  [clj-time "0.11.0"]
                  [org.clojure/core.async "0.2.374"]
@@ -19,7 +19,9 @@
                    :resource-paths ["resources-dev"]
                    :jvm-opts ["-Djava.net.preferIPv4Stack=true"]}
              :uberjar {:dependencies [[ch.qos.logback/logback-classic "1.1.3"]]
-                       :resource-paths ["resources-release"]}}
+                       :resource-paths ["resources-release"]
+                       :aot :all
+                       :jvm-opts ["-Dclojure.compiler.direct-linking=true"]}}
   :aot [crow.registrar-source
         crow.registrar
         crow.protocol

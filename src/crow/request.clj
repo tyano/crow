@@ -11,7 +11,8 @@
             [clojure.tools.logging :as log]
             [schema.core :as s])
   (:import [com.shelf.messagepack MessagePackFrameDecoder]
-           [msgpack.core Ext]))
+           [msgpack.core Ext]
+           [java.net ConnectException]))
 
 
 (defn frame-decorder
@@ -91,7 +92,7 @@
                       :pipeline-transform #(.addFirst % "framer" (frame-decorder))})
     #(wrap-duplex-stream %)))
 
-(defn send
+(defn send*
   [address port req timeout-ms]
   (log/trace "send-recv-timeout:" timeout-ms)
   (chain (tcp/client {:host address,
@@ -141,3 +142,19 @@
             (fn []
               (log/trace "stream closed.")
               (close! stream)))))))
+
+(defn send
+  [address port req timeout-ms retry-count retry-interval-ms stream-handler]
+  (d/loop [retry retry-count result nil]
+    (if (>= retry 0)
+      (try
+        @(-> (send* address port req timeout-ms)
+             (stream-handler))
+        (catch ConnectException ex
+          (Thread/sleep retry-interval-ms)
+          (log/info "retry! -- remaining " (dec retry) " times.")
+          (d/recur (dec retry) ex)))
+      (if (instance? Throwable result)
+        (throw result)
+        result))))
+

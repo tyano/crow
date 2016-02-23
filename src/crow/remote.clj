@@ -39,46 +39,47 @@
    {:keys [address port] :as service} :- Service
    {:keys [target-ns fn-name args]} :- CallDescriptor]
   (let [msg (remote-call target-ns fn-name args)]
-    (-> (send address port msg timeout-ms)
-      (chain
-        (fn [msg]
-          (cond
-            (false? msg) ; Couldn't send.
-            (do
-              (log/debug "Couldn't send. maybe couldn't connnect to pear.")
-              request/connect-failed)
+    (send address port msg timeout-ms 0 500
+      #(-> %
+        (chain
+          (fn [msg]
+            (cond
+              (false? msg) ; Couldn't send.
+              (do
+                (log/debug "Couldn't send. maybe couldn't connnect to pear.")
+                request/connect-failed)
 
-            (protocol-error? msg)
-            (throw+ {:type :protocol-error, :error-code (:error-code msg), :message (:message msg)})
+              (protocol-error? msg)
+              (throw+ {:type :protocol-error, :error-code (:error-code msg), :message (:message msg)})
 
-            (call-exception? msg)
-            (let [type-str    (:type msg)
-                  stack-trace (:stack-trace msg)]
-              (throw+ {:type (keyword type-str)} stack-trace))
+              (call-exception? msg)
+              (let [type-str    (:type msg)
+                    stack-trace (:stack-trace msg)]
+                (throw+ {:type (keyword type-str)} stack-trace))
 
-            (call-result? msg)
-            (:obj msg)
+              (call-result? msg)
+              (:obj msg)
 
-            (= request/timeout msg)
-            msg
+              (= request/timeout msg)
+              msg
 
-            (= request/drained msg)
-            (do
-              (log/debug "DRAINED!")
-              nil)
+              (= request/drained msg)
+              (do
+                (log/debug "DRAINED!")
+                nil)
 
-            :else
-            (throw (IllegalStateException. (str "No such message format: " (pr-str msg))))))
-        (fn [msg']
-          (try
-            (when-not (nil? msg')
-              (>!! ch msg'))
-            (finally
-              (close! ch)))))
+              :else
+              (throw (IllegalStateException. (str "No such message format: " (pr-str msg))))))
+          (fn [msg']
+            (try
+              (when-not (nil? msg')
+                (>!! ch msg'))
+              (finally
+                (close! ch)))))
 
-      (d/catch
-        (fn [th]
-          (>!! ch th))))
+        (d/catch
+          (fn [th]
+            (>!! ch th)))))
     ch))
 
 (def ^:dynamic *default-finder*)

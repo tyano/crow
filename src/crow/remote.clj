@@ -24,6 +24,8 @@
    args           :- (s/maybe [s/Any])])
 
 (def DiscoveryOptions {(s/optional-key :timeout-ms) s/Num
+                       (s/optional-key :send-retry-count) s/Num
+                       (s/optional-key :retry-interval) s/Num
                        s/Keyword s/Any})
 
 (def Service {:address  s/Str
@@ -202,10 +204,10 @@
   [ch
    service-desc :- ServiceDescriptor
    call-desc :- CallDescriptor
-   {:keys [retry-count base-retry-interval-ms]
-    :or [retry-count 3 base-retry-interval-ms 2000] :as options} :- CallOptions]
+   {:keys [send-retry-count retry-interval]
+    :or [send-retry-count 3 retry-interval 500] :as options} :- CallOptions]
   (let [call-fn (make-call-fn ch service-desc call-desc options)]
-    (loop [result (call-fn) retry retry-count interval base-retry-interval-ms]
+    (loop [result (call-fn) retry send-retry-count interval retry-interval]
       (cond
         (and (instance? ConnectionError result)
           (or (= :timeout (:type result)) (= :connect-failed (:type result))))

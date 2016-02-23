@@ -8,8 +8,8 @@
             [clojure.tools.logging :as log]
             [crow.logging :refer [trace-pr]]
             [byte-streams :refer [to-byte-array]]
-            [clojure.tools.logging :as log]
-            [schema.core :as s])
+            [schema.core :as s]
+            [crow.logging :refer [trace-pr]])
   (:import [com.shelf.messagepack MessagePackFrameDecoder]
            [msgpack.core Ext]
            [java.net ConnectException]))
@@ -144,8 +144,8 @@
               (close! stream)))))))
 
 (defn send
-  [address port req timeout-ms retry-count retry-interval-ms stream-handler]
-  (d/loop [retry retry-count result nil]
+  [address port req timeout-ms send-retry-count retry-interval-ms stream-handler]
+  (d/loop [retry send-retry-count result nil]
     (if (>= retry 0)
       (try
         @(-> (send* address port req timeout-ms)

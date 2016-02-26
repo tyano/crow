@@ -70,10 +70,10 @@
    {:keys [address port] :as registrar}
    service-name
    attribute
-   {:keys [timeout-ms send-retry-count retry-interval] :or [timeout-ms Long/MAX_VALUE send-retry-count 3 retry-interval (long 500)] :as options}]
+   {:keys [timeout-ms send-retry-count retry-interval-ms] :or {timeout-ms Long/MAX_VALUE send-retry-count 3 retry-interval-ms (long 500)} :as options}]
   (trace-pr "options:" options)
   (let [req     (discovery service-name attribute)
-        result  @(request/send address port req timeout-ms send-retry-count retry-interval
+        result  @(request/send address port req timeout-ms send-retry-count retry-interval-ms
                     #(-> %
                        (chain
                          (fn [msg]

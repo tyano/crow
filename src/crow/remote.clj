@@ -12,8 +12,6 @@
   (:import [manifold.deferred Recur]
            [crow.request ConnectionError]))
 
-(def ^:dynamic *retry-interval* 3000)
-
 (s/defrecord ServiceDescriptor
   [service-name :- s/Str
    attributes   :- (s/maybe {s/Keyword s/Any})])
@@ -25,7 +23,7 @@
 
 (def DiscoveryOptions {(s/optional-key :timeout-ms) s/Num
                        (s/optional-key :send-retry-count) s/Num
-                       (s/optional-key :retry-interval) s/Num
+                       (s/optional-key :retry-interval-ms) s/Num
                        s/Keyword s/Any})
 
 (def Service {:address  s/Str
@@ -204,10 +202,10 @@
   [ch
    service-desc :- ServiceDescriptor
    call-desc :- CallDescriptor
-   {:keys [send-retry-count retry-interval]
-    :or [send-retry-count 3 retry-interval 500] :as options} :- CallOptions]
+   {:keys [send-retry-count retry-interval-ms]
+    :or {send-retry-count 3 retry-interval-ms 500} :as options} :- CallOptions]
   (let [call-fn (make-call-fn ch service-desc call-desc options)]
-    (loop [result (call-fn) retry send-retry-count interval retry-interval]
+    (loop [result (call-fn) retry send-retry-count interval retry-interval-ms]
       (cond
         (and (instance? ConnectionError result)
           (or (= :timeout (:type result)) (= :connect-failed (:type result))))

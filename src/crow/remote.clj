@@ -12,8 +12,6 @@
   (:import [manifold.deferred Recur]
            [crow.request ConnectionError]))
 
-(def ^:dynamic *retry-interval* 3000)
-
 (s/defrecord ServiceDescriptor
   [service-name :- s/Str
    attributes   :- (s/maybe {s/Keyword s/Any})])
@@ -24,6 +22,8 @@
    args           :- (s/maybe [s/Any])])
 
 (def DiscoveryOptions {(s/optional-key :timeout-ms) s/Num
+                       (s/optional-key :send-retry-count) s/Num
+                       (s/optional-key :retry-interval-ms) s/Num
                        s/Keyword s/Any})
 
 (def Service {:address  s/Str
@@ -39,46 +39,47 @@
    {:keys [address port] :as service} :- Service
    {:keys [target-ns fn-name args]} :- CallDescriptor]
   (let [msg (remote-call target-ns fn-name args)]
-    (-> (send address port msg timeout-ms)
-      (chain
-        (fn [msg]
-          (cond
-            (false? msg) ; Couldn't send.
-            (do
-              (log/debug "Couldn't send. maybe couldn't connnect to pear.")
-              request/connect-failed)
+    (send address port msg timeout-ms 0 500
+      #(-> %
+        (chain
+          (fn [msg]
+            (cond
+              (false? msg) ; Couldn't send.
+              (do
+                (log/debug "Couldn't send. maybe couldn't connnect to pear.")
+                request/connect-failed)
 
-            (protocol-error? msg)
-            (throw+ {:type :protocol-error, :error-code (:error-code msg), :message (:message msg)})
+              (protocol-error? msg)
+              (throw+ {:type :protocol-error, :error-code (:error-code msg), :message (:message msg)})
 
-            (call-exception? msg)
-            (let [type-str    (:type msg)
-                  stack-trace (:stack-trace msg)]
-              (throw+ {:type (keyword type-str)} stack-trace))
+              (call-exception? msg)
+              (let [type-str    (:type msg)
+                    stack-trace (:stack-trace msg)]
+                (throw+ {:type (keyword type-str)} stack-trace))
 
-            (call-result? msg)
-            (:obj msg)
+              (call-result? msg)
+              (:obj msg)
 
-            (= request/timeout msg)
-            msg
+              (= request/timeout msg)
+              msg
 
-            (= request/drained msg)
-            (do
-              (log/debug "DRAINED!")
-              nil)
+              (= request/drained msg)
+              (do
+                (log/debug "DRAINED!")
+                nil)
 
-            :else
-            (throw (IllegalStateException. (str "No such message format: " (pr-str msg))))))
-        (fn [msg']
-          (try
-            (when-not (nil? msg')
-              (>!! ch msg'))
-            (finally
-              (close! ch)))))
+              :else
+              (throw (IllegalStateException. (str "No such message format: " (pr-str msg))))))
+          (fn [msg']
+            (try
+              (when-not (nil? msg')
+                (>!! ch msg'))
+              (finally
+                (close! ch)))))
 
-      (d/catch
-        (fn [th]
-          (>!! ch th))))
+        (d/catch
+          (fn [th]
+            (>!! ch th)))))
     ch))
 
 (def ^:dynamic *default-finder*)
@@ -201,10 +202,10 @@
   [ch
    service-desc :- ServiceDescriptor
    call-desc :- CallDescriptor
-   {:keys [retry-count base-retry-interval-ms]
-    :or [retry-count 3 base-retry-interval-ms 2000] :as options} :- CallOptions]
+   {:keys [send-retry-count retry-interval-ms]
+    :or {send-retry-count 3 retry-interval-ms 500} :as options} :- CallOptions]
   (let [call-fn (make-call-fn ch service-desc call-desc options)]
-    (loop [result (call-fn) retry retry-count interval base-retry-interval-ms]
+    (loop [result (call-fn) retry send-retry-count interval retry-interval-ms]
       (cond
         (and (instance? ConnectionError result)
           (or (= :timeout (:type result)) (= :connect-failed (:type result))))

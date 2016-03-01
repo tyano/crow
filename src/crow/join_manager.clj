@@ -56,8 +56,7 @@
     (ref-set (:service-id-ref service) sid) ;storing a new service id from message. this action must be done at first.
     (alter (:registrars service)
       #(-> (remove-registrar registrar %)
-           (conj {:address address, :port port, :expire-at expire-at})))
-    (alter (:managed-services join-mgr) conj service)))
+           (conj {:address address, :port port, :expire-at expire-at})))))
 
 (defn- service-expired!
   [join-mgr service {:keys [address port]}]
@@ -129,7 +128,6 @@
         (d/catch
           (fn [e]
             (dosync
-              (alter (:managed-services join-mgr) conj service)
               (registrar-died! join-mgr service registrar))
             (throw e))))))
 
@@ -206,10 +204,16 @@
           (when-let [service (<! service-ch)]
             (let [[joined-registrars registrars] (dosync [@(:registrars service) @(:registrars join-mgr)])
                   joined      (map #(dissoc % :expire-at) joined-registrars)
-                  not-joined  (difference registrars joined)
-                  join-req    (for [reg not-joined] {:service service, :registrar reg})]
-                (when (seq join-req)
-                  (onto-chan join-ch join-req false))))
+                  not-joined  (difference registrars joined)]
+              (try
+                (if (seq not-joined)
+                  (let [join-req (for [reg not-joined] {:service service, :registrar reg})]
+                    (trace-pr "join targets:" not-joined)
+                    (onto-chan join-ch join-req false))
+                  (log/trace "There are no join targets!"))
+                (finally
+                  (dosync
+                    (alter (:managed-services join-mgr) conj service))))))
           (catch Throwable e
             (log/error e "service-acceptor error.")))
         (recur)))))

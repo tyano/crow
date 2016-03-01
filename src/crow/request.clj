@@ -3,13 +3,14 @@
   (:require [aleph.tcp :as tcp]
             [msgpack.core :as msgpack]
             [manifold.stream :refer [try-put! try-take! close! take! put!] :as ms]
-            [manifold.deferred :refer [let-flow chain] :as d]
+            [manifold.deferred :refer [let-flow chain error-deferred] :as d]
             [msgpack.core :refer [pack unpack refine-ext] :as msgpack]
             [clojure.tools.logging :as log]
             [crow.logging :refer [trace-pr]]
             [byte-streams :refer [to-byte-array]]
             [schema.core :as s]
-            [crow.logging :refer [trace-pr]])
+            [crow.logging :refer [trace-pr]]
+            [slingshot.slingshot :refer [try+ throw+]])
   (:import [com.shelf.messagepack MessagePackFrameDecoder]
            [msgpack.core Ext]
            [java.net ConnectException]))
@@ -39,7 +40,7 @@
       (refine-ext msg)
       msg)))
 
-(def ConnectionErrorType (s/enum :drained :timeout :connect-failed))
+(def ConnectionErrorType (s/enum :drained :timeout :connect-failed :connect-timeout))
 
 ;;; type describing connection errors.
 (s/defrecord ConnectionError [type :- ConnectionErrorType])
@@ -47,6 +48,7 @@
 (def drained (ConnectionError. :drained))
 (def timeout (ConnectionError. :timeout))
 (def connect-failed (ConnectionError. :connect-failed))
+(def connect-timeout (ConnectionError. :connect-timeout))
 
 
 (defn send!
@@ -109,20 +111,17 @@
                 false
                 (do
                   (log/error (str "Couldn't send a message: " (pr-str req)))
-                  false)
+                  (error-deferred (throw+ {:type connect-failed})))
 
                 timeout
                 (do
                   (log/error (str "Timeout: Couldn't send a message: " (pr-str req)))
-                  timeout)
+                  (error-deferred (throw+ {:type connect-timeout})))
 
                 (recv! stream timeout-ms)))
             (fn [msg]
               (log/trace "receive!")
               (case msg
-                false
-                false
-
                 timeout
                 (do
                   (log/error (str "Timeout: Couldn't receive a response for a req: " (pr-str req)))
@@ -144,17 +143,22 @@
               (close! stream)))))))
 
 (defn send
-  [address port req timeout-ms send-retry-count retry-interval-ms stream-handler]
-  (d/loop [retry send-retry-count result nil]
-    (if (>= retry 0)
-      (try
-        @(-> (send* address port req timeout-ms)
-             (stream-handler))
-        (catch ConnectException ex
-          (Thread/sleep retry-interval-ms)
-          (log/info "retry! -- remaining " (dec retry) " times.")
-          (d/recur (dec retry) ex)))
-      (if (instance? Throwable result)
-        (throw result)
-        result))))
+  [address port req timeout-ms send-retry-count retry-interval-ms]
+  ;; deferred/loop returns a deferred object, but
+  ;; the loop-action works synchronously.
+  ;; For making all loop-actions asynchronously, Here I use deferred/future.
+  (d/future
+    @(d/loop [retry send-retry-count result nil]
+        (if (>= retry 0)
+          (try+
+            @(send* address port req timeout-ms)
+            (catch (or (instance? ConnectException %)
+                       (= (:type %) connect-failed)
+                       (= (:type %) connect-timeout)) ex-obj
+              (Thread/sleep retry-interval-ms)
+              (log/info "retry! -- remaining " (dec retry) " times.")
+              (d/recur (dec retry) (:throwable &throw-context))))
+          (if (instance? Throwable result)
+            (throw result)
+            result)))))
 

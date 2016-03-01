@@ -73,40 +73,36 @@
    {:keys [timeout-ms send-retry-count retry-interval-ms] :or {timeout-ms Long/MAX_VALUE send-retry-count 3 retry-interval-ms (long 500)} :as options}]
   (trace-pr "options:" options)
   (let [req     (discovery service-name attribute)
-        result  @(request/send address port req timeout-ms send-retry-count retry-interval-ms
-                    #(-> %
-                       (chain
-                         (fn [msg]
-                           (cond
-                             (false? msg)
-                             (throw+ {:type ::can-not-connect, :address address, :port port})
+        result  @(-> (request/send address port req timeout-ms send-retry-count retry-interval-ms)
+                    (chain
+                      (fn [msg]
+                        (cond
+                          (service-found? msg)
+                          (do
+                             (trace-pr "service-found: " msg)
+                             (vec (:services msg)))
 
-                             (service-found? msg)
-                             (do
-                                (trace-pr "service-found: " msg)
-                                (vec (:services msg)))
+                          (service-not-found? msg)
+                          nil
 
-                             (service-not-found? msg)
-                             nil
+                          (call-exception? msg)
+                          (let [type-str    (:type msg)
+                                stack-trace (:stack-trace msg)]
+                            (throw+ {:type (keyword type-str), :stack-trace stack-trace}))
 
-                             (call-exception? msg)
-                             (let [type-str    (:type msg)
-                                   stack-trace (:stack-trace msg)]
-                               (throw+ {:type (keyword type-str), :stack-trace stack-trace}))
+                          (= request/timeout msg)
+                          nil
 
-                             (= request/timeout msg)
-                             nil
+                          (= request/drained msg)
+                          nil
 
-                             (= request/drained msg)
-                             nil
-
-                             :else
-                             (throw+ {:type ::illegal-reponse, :response msg}))))
-                       (d/catch Throwable
-                          (fn [th]
-                             (log/error th "An error occured when sending a discovery request.")
-                             (abandon-registrar! finder registrar)
-                             (throw th)))))]
+                          :else
+                          (throw+ {:type ::illegal-reponse, :response msg}))))
+                      (d/catch Throwable
+                         (fn [th]
+                            (log/error th "An error occured when sending a discovery request.")
+                            (abandon-registrar! finder registrar)
+                            (throw th))))]
     (if (instance? Throwable result)
       (throw result)
       result)))

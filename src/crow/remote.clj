@@ -39,16 +39,10 @@
    {:keys [address port] :as service} :- Service
    {:keys [target-ns fn-name args]} :- CallDescriptor]
   (let [msg (remote-call target-ns fn-name args)]
-    (send address port msg timeout-ms 0 500
-      #(-> %
+    (-> (send address port msg timeout-ms 0 500)
         (chain
           (fn [msg]
             (cond
-              (false? msg) ; Couldn't send.
-              (do
-                (log/debug "Couldn't send. maybe couldn't connnect to pear.")
-                request/connect-failed)
-
               (protocol-error? msg)
               (throw+ {:type :protocol-error, :error-code (:error-code msg), :message (:message msg)})
 
@@ -79,7 +73,7 @@
 
         (d/catch
           (fn [th]
-            (>!! ch th)))))
+            (>!! ch th))))
     ch))
 
 (def ^:dynamic *default-finder*)
@@ -164,7 +158,7 @@
   "read a channel and if the result value is an instance of
    Throwable, then throw the exception. Otherwise returns the
    result.
-   This macro is a kind <!! macro of core.async, so calling
+   This macro is a kind of <!! macro of core.async, so calling
    this macro will block current thread."
   [ch]
   (when ch
@@ -204,11 +198,13 @@
    call-desc :- CallDescriptor
    {:keys [send-retry-count retry-interval-ms]
     :or {send-retry-count 3 retry-interval-ms 500} :as options} :- CallOptions]
+
   (let [call-fn (make-call-fn ch service-desc call-desc options)]
     (loop [result (call-fn) retry send-retry-count interval retry-interval-ms]
       (cond
         (and (instance? ConnectionError result)
-          (or (= :timeout (:type result)) (= :connect-failed (:type result))))
+             (or (= :timeout (:type result))
+                 (= :connect-failed (:type result))))
         (let [new-retry (debug-pr "RETRY! " (dec retry))]
           (if (zero? new-retry)
             (if (instance? ConnectionError result)

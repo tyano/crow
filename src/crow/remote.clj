@@ -146,14 +146,14 @@
       (async-fn ~ch service-desc# call-desc# ~options)))
 
   ([call-list options]
-    `(async (chan 1) ~call-list ~options))
+    `(async (chan) ~call-list ~options))
 
   ([ch service-namespace attributes call-list options]
    `(let [[service-desc# call-desc#] (parse-call-list ~service-namespace ~attributes ~call-list)]
       (async-fn ~ch service-desc# call-desc# ~options)))
 
   ([service-namespace attributes call-list options]
-    `(async (chan 1) ~service-namespace ~attributes ~call-list ~options)))
+    `(async (chan) ~service-namespace ~attributes ~call-list ~options)))
 
 (defn <!!+
   "read a channel and if the result value is an instance of
@@ -247,14 +247,14 @@
         (try-call ~ch service-desc# call-desc# ~opts)))
 
   ([call-list opts]
-    `(call (chan 1) ~call-list ~opts))
+    `(call (chan) ~call-list ~opts))
 
   ([ch service-namespace attributes call-list opts]
     `(let [[service-desc# call-desc#] (parse-call-list ~service-namespace ~attributes ~call-list)]
         (try-call ~ch service-desc# call-desc# ~opts)))
 
   ([service-namespace attributes call-list opts]
-    `(call (chan 1) ~service-namespace ~attributes ~call-list ~opts)))
+    `(call (chan) ~service-namespace ~attributes ~call-list ~opts)))
 
 (defn current-finder [] *default-finder*)
 
@@ -264,7 +264,7 @@
       (invoke ~ch ~service call-desc# ~opts)))
 
   ([service call-list opts]
-    `(with-service (chan 1) ~service ~call-list ~opts)))
+    `(with-service (chan) ~service ~call-list ~opts)))
 
 
 

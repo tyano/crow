@@ -40,15 +40,15 @@
       (refine-ext msg)
       msg)))
 
-(def ConnectionErrorType (s/enum :drained :timeout :connect-failed :connect-timeout))
+(def ConnectionErrorType (s/enum ::drained ::timeout ::connect-failed ::connect-timeout))
 
 ;;; type describing connection errors.
 (s/defrecord ConnectionError [type :- ConnectionErrorType])
 
-(def drained (ConnectionError. :drained))
-(def timeout (ConnectionError. :timeout))
-(def connect-failed (ConnectionError. :connect-failed))
-(def connect-timeout (ConnectionError. :connect-timeout))
+(def drained (ConnectionError. ::drained))
+(def timeout (ConnectionError. ::timeout))
+(def connect-failed (ConnectionError. ::connect-failed))
+(def connect-timeout (ConnectionError. ::connect-timeout))
 
 
 (defn send!
@@ -110,7 +110,7 @@
       (if (> retry send-retry-count)
         (cond
           (instance? ConnectionError result)
-          (throw+ {:type (:type result)})
+          (throw+ {:type ::connection-error, :kind (:type result)})
 
           (instance? Throwable result)
           (throw result)
@@ -143,7 +143,7 @@
   ([address port req timeout-ms send-retry-count send-retry-interval-ms]
     (log/trace "send-recv-timeout:" timeout-ms)
     (let-flow [stream (try-send address port req timeout-ms send-retry-count send-retry-interval-ms)]
-      (-> (let-flow [msg  (recv! stream timeout-ms)]
+      (-> (let-flow [msg (recv! stream timeout-ms)]
             (log/trace "receive!")
             (case msg
               timeout

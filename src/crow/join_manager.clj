@@ -112,8 +112,8 @@
               (registration? msg)
               (join! join-mgr service registrar msg)
 
-              (or (= request/timeout msg)
-                  (= request/drained msg))
+              (or (identical? request/timeout msg)
+                  (identical? request/drained msg))
               (do
                 (trace-pr msg)
                 (throw+ {:type msg
@@ -152,8 +152,8 @@
                 (service-expired! join-mgr service registrar)
                 false)
 
-              (or (= request/timeout msg)
-                  (= request/drained msg))
+              (or (identical? request/timeout msg)
+                  (identical? request/drained msg))
               (do
                 (trace-pr msg)
                 (throw+ {:type msg
@@ -283,10 +283,12 @@
                      (fn [resp]
                        (cond
                          (ack? resp)
-                           (do
-                             (log/info "A registrar revived: " (pr-str registrar))
-                             (registrar-revived! join-mgr registrar))
-                         :else nil)))))
+                         (do
+                           (log/info "A registrar revived: " (pr-str registrar))
+                           (registrar-revived! join-mgr registrar))
+
+                         :else
+                         nil)))))
             (catch Throwable th
               ;; dead-registrar-checker usually get an error when checking registrars,
               ;; because the purpose of this thread is accessing to 'dead' registrars for checking

@@ -90,10 +90,10 @@
                                 stack-trace (:stack-trace msg)]
                             (throw+ {:type (keyword type-str), :stack-trace stack-trace}))
 
-                          (= request/timeout msg)
+                          (identical? request/timeout msg)
                           nil
 
-                          (= request/drained msg)
+                          (identical? request/drained msg)
                           nil
 
                           :else

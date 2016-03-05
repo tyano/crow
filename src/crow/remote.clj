@@ -9,8 +9,7 @@
             [clojure.tools.logging :as log]
             [slingshot.slingshot :refer [try+ throw+]]
             [schema.core :as s])
-  (:import [manifold.deferred Recur]
-           [crow.request ConnectionError]))
+  (:import [java.net ConnectException]))
 
 (s/defrecord ServiceDescriptor
   [service-name :- s/Str
@@ -56,13 +55,13 @@
               (call-result? msg)
               (:obj msg)
 
-              (= request/timeout msg)
-              msg
-
-              (= request/drained msg)
+              (identical? request/drained msg)
               (do
                 (log/debug "DRAINED!")
                 nil)
+
+              (identical? request/timeout msg)
+              msg
 
               :else
               (throw (IllegalStateException. (str "No such message format: " (pr-str msg))))))
@@ -171,18 +170,8 @@
         (instance? Throwable result)
         (throw result)
 
-        (instance? ConnectionError result)
-        (throw+ result)
-
         :else
         result))))
-
-(s/defn call-fn
-  [ch
-   service-desc :- ServiceDescriptor
-   call-desc :- CallDescriptor
-   options   :- CallOptions]
-   (<!!+ (async-fn ch service-desc call-desc options)))
 
 (s/defn ^:private make-call-fn
   [ch
@@ -191,8 +180,32 @@
    options :- CallOptions]
   (fn []
     (try+
-      (call-fn ch service-desc call-desc options)
-      (catch ConnectionError e e))))
+      (<!!+ (async-fn ch service-desc call-desc options))
+      (catch [:type :crow.request/connection-error] _
+        (:object &throw-context))
+      (catch ConnectException ex
+        ex))))
+
+
+(defn- timeout?
+  [msg]
+  (when msg (identical? msg request/timeout)))
+
+(defn- connection-error?
+  [msg]
+  (when msg
+    (and (associative? msg)
+         (= :crow.request/connection-error (:type msg)))))
+
+(defn- connect-exception?
+  [msg]
+  (when msg
+    (instance? ConnectException msg)))
+
+(defn- need-retry?
+  [msg]
+  (when msg
+    (or (timeout? msg) (connection-error? msg) (connect-exception? msg))))
 
 (s/defn try-call
   [ch
@@ -204,17 +217,28 @@
   (let [call-fn (make-call-fn ch service-desc call-desc options)]
     (loop [result nil retry 0]
       (if (> retry recv-retry-count)
-        (if (= result request/timeout)
-          (throw+ {:type result})
+        (cond
+          (timeout? result)
+          (throw+ {:type :crow.request/connection-error, :kind (:type result)})
+
+          (connection-error? result)
+          (throw+ result)
+
+          (instance? Throwable result)
+          (throw result)
+
+          :else
           result)
 
         (let [r (call-fn)]
-          (case r
-            request/timeout
-            (let [new-retry (debug-pr (format "RETRY! %d/%d" (inc retry) recv-retry-count) (inc retry))]
+          (cond
+            (need-retry? r)
+            (let [new-retry (inc retry)]
+              (log/debug (format "RETRY! %d/%d" new-retry recv-retry-count))
               (Thread/sleep (* recv-retry-interval-ms new-retry))
               (recur r new-retry))
 
+            :else
             r))))))
 
 (defmacro call

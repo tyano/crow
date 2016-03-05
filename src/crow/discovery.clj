@@ -28,7 +28,7 @@
       (doseq [{:keys [address port] :as registrar} current-dead-registrars]
         (try
           (trace-pr "checking: " registrar)
-          (let [msg @(request/send* address port (ping) nil)]
+          (let [msg @(request/send address port (ping) nil)]
             (if (ack? msg)
               (do
                 (info-pr "registrar revived: " registrar)

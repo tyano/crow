@@ -3,7 +3,7 @@
   (:require [aleph.tcp :as tcp]
             [msgpack.core :as msgpack]
             [manifold.stream :refer [try-put! try-take! close! take! put!] :as ms]
-            [manifold.deferred :refer [let-flow chain error-deferred] :as d]
+            [manifold.deferred :refer [let-flow chain success-deferred error-deferred] :as d]
             [msgpack.core :refer [pack unpack refine-ext] :as msgpack]
             [clojure.tools.logging :as log]
             [crow.logging :refer [trace-pr]]
@@ -92,47 +92,71 @@
   (chain (tcp/client {:host address,
                       :port port,
                       :pipeline-transform #(.addFirst % "framer" (frame-decorder))})
-    #(wrap-duplex-stream %)))
+    wrap-duplex-stream))
 
-(defn send*
-  [address port req timeout-ms]
-  (log/trace "send-recv-timeout:" timeout-ms)
-  (chain (tcp/client {:host address,
-                      :port port,
-                      :pipeline-transform #(.addFirst % "framer" (frame-decorder))})
-    #(wrap-duplex-stream %)
-    (fn [stream]
-      (log/trace "sending...")
-      (-> (send! stream req timeout-ms)
-          (chain
-            (fn [sent]
-              (log/trace "sent!")
-              (case sent
-                false
-                (do
-                  (log/error (str "Couldn't send a message: " (pr-str req)))
-                  (error-deferred (throw+ {:type connect-failed})))
+(defn- try-send
+  [address port req timeout-ms send-retry-count retry-interval-ms]
+  (letfn [(retry-send
+            [stream retry-count result]
+            (when stream
+              (close! stream)
+              (log/trace "stream closed."))
+            (Thread/sleep (* retry-interval-ms retry-count))
+            (when (<= retry-count send-retry-count)
+              (log/info (format "retry! -- times: %d/%d" retry-count send-retry-count)))
+            (d/recur retry-count result))]
 
-                timeout
-                (do
-                  (log/error (str "Timeout: Couldn't send a message: " (pr-str req)))
-                  (error-deferred (throw+ {:type connect-timeout})))
+    (d/loop [retry 0 result nil]
+      (if (> retry send-retry-count)
+        (let-flow [r result]
+          (case r
+            connect-failed
+            (throw+ {:type connect-failed})
 
-                (recv! stream timeout-ms)))
-            (fn [msg]
-              (log/trace "receive!")
-              (case msg
-                timeout
-                (do
-                  (log/error (str "Timeout: Couldn't receive a response for a req: " (pr-str req)))
-                  timeout)
+            connect-timeout
+            (throw+ {:type connect-timeout})
 
-                drained
-                (do
-                  (log/error (str "Drained: Peer closed: req: " (pr-str req)))
-                  drained)
+            result))
 
-                msg)))
+        (-> (let-flow [stream (client address port)]
+              (-> (let-flow [sent (send! stream req timeout-ms)]
+                    (case sent
+                      false
+                      (do
+                        (log/error (str "Couldn't send a message: " (pr-str req)))
+                        (retry-send stream (inc retry) (success-deferred connect-failed)))
+
+                      timeout
+                      (do
+                        (log/error (str "Timeout: Couldn't send a message: " (pr-str req)))
+                        (retry-send stream (inc retry) (success-deferred connect-timeout)))
+
+                      stream))
+                  (d/catch ConnectException
+                    (fn [ex]
+                      (retry-send stream (inc retry) (error-deferred ex))))))
+            (d/catch ConnectException
+              (fn [ex]
+                (retry-send nil (inc retry) (error-deferred ex)))))))))
+
+(defn send
+  ([address port req timeout-ms send-retry-count retry-interval-ms]
+    (log/trace "send-recv-timeout:" timeout-ms)
+    (let-flow [stream (try-send address port req timeout-ms send-retry-count retry-interval-ms)]
+      (-> (let-flow [msg  (recv! stream timeout-ms)]
+            (log/trace "receive!")
+            (case msg
+              timeout
+              (do
+                (log/error (str "Timeout: Couldn't receive a response for a req: " (pr-str req)))
+                timeout)
+
+              drained
+              (do
+                (log/error (str "Drained: Peer closed: req: " (pr-str req)))
+                drained)
+
+              msg))
           (d/catch
             (fn [th]
               (log/error th "send error!")
@@ -140,25 +164,7 @@
           (d/finally
             (fn []
               (log/trace "stream closed.")
-              (close! stream)))))))
-
-(defn send
-  [address port req timeout-ms send-retry-count retry-interval-ms]
-  ;; deferred/loop returns a deferred object, but
-  ;; the loop-action works synchronously.
-  ;; For making all loop-actions asynchronously, Here I use deferred/future.
-  (d/future
-    @(d/loop [retry send-retry-count result nil]
-        (if (>= retry 0)
-          (try+
-            @(send* address port req timeout-ms)
-            (catch (or (instance? ConnectException %)
-                       (= (:type %) connect-failed)
-                       (= (:type %) connect-timeout)) ex-obj
-              (Thread/sleep retry-interval-ms)
-              (log/info "retry! -- remaining " (dec retry) " times.")
-              (d/recur (dec retry) (:throwable &throw-context))))
-          (if (instance? Throwable result)
-            (throw result)
-            result)))))
+              (close! stream))))))
+  ([address port req timeout-ms]
+    (send address port req timeout-ms 0 0)))
 

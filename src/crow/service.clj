@@ -104,8 +104,8 @@
   [{:keys [address port name attributes id-store public-namespaces registrar-source
            fetch-registrar-interval-ms heart-beat-buffer-ms dead-registrar-check-interval
            rejoin-interval-ms send-recv-timeout
-           send-retry-count retry-interval-ms]
-      :or {address "localhost" attributes {} send-recv-timeout nil send-retry-count 3 retry-interval-ms 500} :as config}]
+           send-retry-count send-retry-interval-ms]
+      :or {address "localhost" attributes {} send-recv-timeout nil send-retry-count 3 send-retry-interval-ms 500} :as config}]
   {:pre [port (not (clojure.string/blank? name)) id-store (seq public-namespaces) registrar-source fetch-registrar-interval-ms heart-beat-buffer-ms]}
   (apply require (map symbol public-namespaces))
   (let [sid     (id/read id-store)
@@ -122,7 +122,7 @@
                                        rejoin-interval-ms
                                        send-recv-timeout
                                        send-retry-count
-                                       retry-interval-ms)]
+                                       send-retry-interval-ms)]
       (join join-mgr service))))
 
 (defn -main

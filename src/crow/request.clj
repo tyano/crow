@@ -95,13 +95,13 @@
     wrap-duplex-stream))
 
 (defn- try-send
-  [address port req timeout-ms send-retry-count retry-interval-ms]
+  [address port req timeout-ms send-retry-count send-retry-interval-ms]
   (letfn [(retry-send
             [stream retry-count result]
             (when stream
               (close! stream)
               (log/trace "stream closed."))
-            (Thread/sleep (* retry-interval-ms retry-count))
+            (Thread/sleep (* send-retry-interval-ms retry-count))
             (when (<= retry-count send-retry-count)
               (log/info (format "retry! -- times: %d/%d" retry-count send-retry-count)))
             (d/recur retry-count result))]
@@ -140,9 +140,9 @@
                 (retry-send nil (inc retry) (error-deferred ex)))))))))
 
 (defn send
-  ([address port req timeout-ms send-retry-count retry-interval-ms]
+  ([address port req timeout-ms send-retry-count send-retry-interval-ms]
     (log/trace "send-recv-timeout:" timeout-ms)
-    (let-flow [stream (try-send address port req timeout-ms send-retry-count retry-interval-ms)]
+    (let-flow [stream (try-send address port req timeout-ms send-retry-count send-retry-interval-ms)]
       (-> (let-flow [msg  (recv! stream timeout-ms)]
             (log/trace "receive!")
             (case msg

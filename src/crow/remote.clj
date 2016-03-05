@@ -23,7 +23,9 @@
 
 (def DiscoveryOptions {(s/optional-key :timeout-ms) s/Num
                        (s/optional-key :send-retry-count) s/Num
-                       (s/optional-key :retry-interval-ms) s/Num
+                       (s/optional-key :send-retry-interval-ms) s/Num
+                       (s/optional-key :recv-retry-count) s/Num
+                       (s/optional-key :recv-retry-interval-ms) s/Num
                        s/Keyword s/Any})
 
 (def Service {:address  s/Str
@@ -35,11 +37,11 @@
 
 (s/defn invoke
   [ch
-   timeout-ms :- (s/maybe s/Num)
    {:keys [address port] :as service} :- Service
-   {:keys [target-ns fn-name args]} :- CallDescriptor]
+   {:keys [target-ns fn-name args]} :- CallDescriptor
+   {:keys [timeout-ms send-retry-count send-retry-interval-ms], :or {send-retry-count 3, send-retry-interval-ms 500}} :- DiscoveryOptions]
   (let [msg (remote-call target-ns fn-name args)]
-    (-> (send address port msg timeout-ms 0 500)
+    (-> (send address port msg timeout-ms send-retry-count send-retry-interval-ms)
         (chain
           (fn [msg]
             (cond
@@ -93,7 +95,7 @@
 
 (s/defn find-services :- [Service]
   [{:keys [service-name attributes]} :- ServiceDescriptor
-   options      :- DiscoveryOptions]
+   options :- DiscoveryOptions]
   (when-not *default-finder*
     (throw+ {:type :finder-not-found, :message "ServiceFinder doesn't exist! You must start a service finder by start-service-finder at first!"}))
   (discover *default-finder* service-name attributes options))
@@ -110,7 +112,7 @@
    options      :- CallOptions]
   (debug-pr (str "remote call. service: " (pr-str service-desc) ", fn: " (pr-str call-desc)))
   (if-let [service (find-service service-desc options)]
-    (invoke ch (:timeout-ms options) service call-desc)
+    (invoke ch service call-desc options)
     (throw (IllegalStateException. (format "Service Not Found: service-name=%s, attributes=%s"
                                       (:service-name service-desc)
                                       (pr-str (:attributes service-desc)))))))
@@ -196,26 +198,24 @@
   [ch
    service-desc :- ServiceDescriptor
    call-desc :- CallDescriptor
-   {:keys [send-retry-count retry-interval-ms]
-    :or {send-retry-count 3 retry-interval-ms 500} :as options} :- CallOptions]
+   {:keys [recv-retry-count recv-retry-interval-ms]
+    :or {recv-retry-count 3 recv-retry-interval-ms 500} :as options} :- CallOptions]
 
   (let [call-fn (make-call-fn ch service-desc call-desc options)]
-    (loop [result (call-fn) retry send-retry-count interval retry-interval-ms]
-      (cond
-        (and (instance? ConnectionError result)
-             (or (= :timeout (:type result))
-                 (= :connect-failed (:type result))))
-        (let [new-retry (debug-pr "RETRY! " (dec retry))]
-          (if (zero? new-retry)
-            (if (instance? ConnectionError result)
-              (throw+ {:type (:type result)})
-              result)
-            (do
-              (Thread/sleep interval)
-              (recur (call-fn) new-retry (* interval 2)))))
+    (loop [result nil retry 0]
+      (if (> retry recv-retry-count)
+        (if (= result request/timeout)
+          (throw+ {:type result})
+          result)
 
-        :else
-        result))))
+        (let [r (call-fn)]
+          (case r
+            request/timeout
+            (let [new-retry (debug-pr (format "RETRY! %d/%d" (inc retry) recv-retry-count) (inc retry))]
+              (Thread/sleep (* recv-retry-interval-ms new-retry))
+              (recur r new-retry))
+
+            r))))))
 
 (defmacro call
   ([ch call-list opts]
@@ -237,7 +237,7 @@
 (defmacro with-service
   ([ch service call-list opts]
    `(let [[service-desc# call-desc#] (parse-call-list ~call-list)]
-      (invoke ~ch (:timeout-ms ~opts) ~service call-desc#)))
+      (invoke ~ch ~service call-desc# ~opts)))
 
   ([service call-list opts]
     `(with-service (chan 1) ~service ~call-list ~opts)))

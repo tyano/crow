@@ -23,8 +23,8 @@
 (def DiscoveryOptions {(s/optional-key :timeout-ms) s/Num
                        (s/optional-key :send-retry-count) s/Num
                        (s/optional-key :send-retry-interval-ms) s/Num
-                       (s/optional-key :recv-retry-count) s/Num
-                       (s/optional-key :recv-retry-interval-ms) s/Num
+                       (s/optional-key :remote-call-retry-count) s/Num
+                       (s/optional-key :remote-call-retry-interval-ms) s/Num
                        s/Keyword s/Any})
 
 (def Service {:address  s/Str
@@ -211,12 +211,12 @@
   [ch
    service-desc :- ServiceDescriptor
    call-desc :- CallDescriptor
-   {:keys [recv-retry-count recv-retry-interval-ms]
-    :or {recv-retry-count 3 recv-retry-interval-ms 500} :as options} :- CallOptions]
+   {:keys [remote-call-retry-count remote-call-retry-interval-ms]
+    :or {remote-call-retry-count 3 remote-call-retry-interval-ms 500} :as options} :- CallOptions]
 
   (let [call-fn (make-call-fn ch service-desc call-desc options)]
     (loop [result nil retry 0]
-      (if (> retry recv-retry-count)
+      (if (> retry remote-call-retry-count)
         (cond
           (timeout? result)
           (throw+ {:type :crow.request/connection-error, :kind (:type result)})
@@ -234,8 +234,8 @@
           (cond
             (need-retry? r)
             (let [new-retry (inc retry)]
-              (log/debug (format "RETRY! %d/%d" new-retry recv-retry-count))
-              (Thread/sleep (* recv-retry-interval-ms new-retry))
+              (log/debug (format "RETRY! %d/%d" new-retry remote-call-retry-count))
+              (Thread/sleep (* remote-call-retry-interval-ms new-retry))
               (recur r new-retry))
 
             :else

@@ -108,15 +108,15 @@
 
     (d/loop [retry 0 result nil]
       (if (> retry send-retry-count)
-        (let-flow [r result]
-          (case r
-            connect-failed
-            (throw+ {:type connect-failed})
+        (cond
+          (instance? ConnectionError result)
+          (throw+ {:type (:type result)})
 
-            connect-timeout
-            (throw+ {:type connect-timeout})
+          (instance? Throwable result)
+          (throw result)
 
-            result))
+          :else
+          result)
 
         (-> (let-flow [stream (client address port)]
               (-> (let-flow [sent (send! stream req timeout-ms)]
@@ -124,20 +124,20 @@
                       false
                       (do
                         (log/error (str "Couldn't send a message: " (pr-str req)))
-                        (retry-send stream (inc retry) (success-deferred connect-failed)))
+                        (retry-send stream (inc retry) connect-failed))
 
                       timeout
                       (do
                         (log/error (str "Timeout: Couldn't send a message: " (pr-str req)))
-                        (retry-send stream (inc retry) (success-deferred connect-timeout)))
+                        (retry-send stream (inc retry) connect-timeout))
 
                       stream))
                   (d/catch ConnectException
                     (fn [ex]
-                      (retry-send stream (inc retry) (error-deferred ex))))))
+                      (retry-send stream (inc retry) ex)))))
             (d/catch ConnectException
               (fn [ex]
-                (retry-send nil (inc retry) (error-deferred ex)))))))))
+                (retry-send nil (inc retry) ex))))))))
 
 (defn send
   ([address port req timeout-ms send-retry-count send-retry-interval-ms]

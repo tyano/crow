@@ -67,19 +67,19 @@
     :else (invalid-message msg)))
 
 (defn- service-handler
-  [service stream info timeout-ms & [{:keys [request-wrapper]}]]
+  [service stream info timeout-ms & [{:keys [middleware]}]]
   (->
     (d/loop []
       (-> (s/try-take! stream ::none timeout-ms ::none)
         (d/chain
-          (fn [m]
-            (if request-wrapper
-              (request-wrapper m)
-              m))
           (fn [msg]
             (if (= ::none msg)
               ::none
-              (d/future (handle-request service msg))))
+              (d/future
+                (if middleware
+                  (let [wrapper-fn (middleware (partial handle-request service))]
+                    (wrapper-fn msg))
+                  (handle-request service msg)))))
           (fn [msg']
             (when-not (= ::none msg')
               (s/try-put! stream msg' timeout-ms ::timeout)))
@@ -116,7 +116,7 @@
         service (new-service address port sid name attributes id-store (set public-namespaces))]
     (tcp/start-server
       (fn [stream info]
-        (service-handler service (wrap-duplex-stream stream) info send-recv-timeout (select-keys config [:request-wrapper])))
+        (service-handler service (wrap-duplex-stream stream) info send-recv-timeout (select-keys config [:middleware])))
       {:port port
        :pipeline-transform #(.addFirst % "framer" (frame-decorder))})
     (let [join-mgr (start-join-manager registrar-source

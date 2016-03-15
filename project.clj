@@ -11,7 +11,8 @@
                  [org.clojure/tools.logging "0.3.1"]
                  [slingshot "0.12.2"]
                  [com.shelf/messagepack-framedecoder "1.0-SNAPSHOT"]
-                 [prismatic/schema "1.0.4"]]
+                 [prismatic/schema "1.0.4"]
+                 [ns-tracker "0.3.0"]]
   :plugins [[lein-midje "3.2"]]
   :repositories {"javelindev-snapshots" "http://javelindev.jp/repository/snapshots"}
   :profiles {:dev {:dependencies [[midje "1.8.3"]

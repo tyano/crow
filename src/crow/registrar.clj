@@ -1,5 +1,6 @@
 (ns crow.registrar
   (:require [aleph.tcp :refer [start-server] :as tcp]
+            [aleph.netty :as netty]
             [manifold.deferred :refer [let-flow chain] :as d]
             [manifold.stream :refer [connect buffer] :as s]
             [clj-time.core :refer [now after? plus millis] :as t]
@@ -182,13 +183,15 @@
     :or {port 4000, renewal-ms default-renewal-ms, watch-interval default-watch-interval send-recv-timeout nil}}]
 
   (let [registrar (new-registrar name renewal-ms watch-interval)]
-    (log/info (str "#### REGISTRAR SERVICE (name: " (pr-str name) " port: " port ") starts."))
     (process-registrar registrar)
-    (tcp/start-server
-      (fn [stream info]
-        (registrar-handler registrar renewal-ms (wrap-duplex-stream stream) info send-recv-timeout))
-      {:port port
-       :pipeline-transform #(.addFirst % "framer" (frame-decorder))})))
+    (let [server
+            (tcp/start-server
+              (fn [stream info]
+                (registrar-handler registrar renewal-ms (wrap-duplex-stream stream) info send-recv-timeout))
+              {:port port
+               :pipeline-transform #(.addFirst % "framer" (frame-decorder))})]
+      (log/info (str "#### REGISTRAR SERVICE (name: " (pr-str name) " port: " (netty/port server) ") starts."))
+      server)))
 
 
 (defn -main
@@ -200,6 +203,10 @@
                             (case k
                               "-r" [:renewal-ms (Long/valueOf v)]
                               "-w" [:watch-interval (Long/valueOf v)]
-                              (throw (IllegalArgumentException. (str "Unknown option: " k))))))]
-      (start-registrar-service
-                (merge {:port (Long/valueOf port-str), :name name} optmap)))))
+                              (throw (IllegalArgumentException. (str "Unknown option: " k))))))
+          server (start-registrar-service
+                    (merge {:port (Long/valueOf port-str), :name name} optmap))]
+      (.. (Runtime/getRuntime) (addShutdownHook (Thread. (fn [] (.close server) (println "SERVER STOPPED.")))))
+      (while true
+        (Thread/sleep 1000)))))
+

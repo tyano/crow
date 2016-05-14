@@ -1,5 +1,6 @@
 (ns crow.service
   (:require [aleph.tcp :as tcp]
+            [aleph.netty :as netty]
             [manifold.stream :refer [connect buffer] :as s]
             [manifold.deferred :refer [let-flow] :as d]
             [crow.protocol :refer [remote-call? invalid-message protocol-error call-result call-exception] :as p]
@@ -113,21 +114,23 @@
   {:pre [port (not (clojure.string/blank? name)) id-store (seq public-namespaces) registrar-source fetch-registrar-interval-ms heart-beat-buffer-ms]}
   (apply require (map symbol public-namespaces))
   (let [sid     (id/read id-store)
-        service (new-service address port sid name attributes id-store (set public-namespaces))]
-    (tcp/start-server
-      (fn [stream info]
-        (service-handler service (wrap-duplex-stream stream) info send-recv-timeout (select-keys config [:middleware])))
-      {:port port
-       :pipeline-transform #(.addFirst % "framer" (frame-decorder))})
-    (let [join-mgr (start-join-manager registrar-source
-                                       fetch-registrar-interval-ms
-                                       dead-registrar-check-interval
-                                       heart-beat-buffer-ms
-                                       rejoin-interval-ms
-                                       send-recv-timeout
-                                       send-retry-count
-                                       send-retry-interval-ms)]
-      (join join-mgr service))))
+        service (new-service address port sid name attributes id-store (set public-namespaces))
+        server  (tcp/start-server
+                  (fn [stream info]
+                    (service-handler service (wrap-duplex-stream stream) info send-recv-timeout (select-keys config [:middleware])))
+                  {:port port
+                   :pipeline-transform #(.addFirst % "framer" (frame-decorder))})
+        join-mgr (start-join-manager registrar-source
+                                     fetch-registrar-interval-ms
+                                     dead-registrar-check-interval
+                                     heart-beat-buffer-ms
+                                     rejoin-interval-ms
+                                     send-recv-timeout
+                                     send-retry-count
+                                     send-retry-interval-ms)]
+    (join join-mgr service)
+    (log/info (str "#### SERVICE (name: " name ", port: " (netty/port server) ") starts."))
+    server))
 
 (defn -main
   [& [service-name port-str :as args]]
@@ -143,6 +146,8 @@
                 :fetch-registrar-interval-ms 30000
                 :heart-beat-buffer-ms      4000
                 :dead-registrar-check-interval 10000
-                :rejoin-interval-ms 10000}]
-    (log/info (str "#### SERVICE (name: " service-name ", port: " port ") starts."))
-    (start-service config)))
+                :rejoin-interval-ms 10000}
+        server (start-service config)]
+    (.. (Runtime/getRuntime) (addShutdownHook (Thread. (fn [] (.close server) (println "SERVER STOPPED.")))))
+    (while true
+      (Thread/sleep 1000))))

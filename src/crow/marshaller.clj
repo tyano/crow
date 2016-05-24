@@ -37,15 +37,15 @@
       (wrapper-array? obj-class)   :primitive-array
       :else :object)))
 
-(defmulti -marshal "convert an object into other msgpack-safe object." (fn [obj] (object-type obj)))
-(defmulti -unmarshal "convert an object from msgpack-safe format to a real object." (fn [obj] (class obj)))
+(defmulti marshal-data "convert an object into other msgpack-safe object." (fn [obj] (object-type obj)))
+(defmulti unmarshal-data "convert an object from msgpack-safe format to a real object." (fn [obj] (class obj)))
 
-(defmethod -marshal :primitive [obj] obj)
-(defmethod -marshal :primitive-array [obj] obj)
-(defmethod -marshal :default [obj] (pr-str obj))
+(defmethod marshal-data :primitive [obj] obj)
+(defmethod marshal-data :primitive-array [obj] obj)
+(defmethod marshal-data :default [obj] (pr-str obj))
 
-(defmethod -unmarshal String [obj] (edn/read-string obj))
-(defmethod -unmarshal :default [obj] obj)
+(defmethod unmarshal-data String [obj] (edn/read-string obj))
+(defmethod unmarshal-data :default [obj] obj)
 
 (defprotocol ObjectMarshaller
   (marshal [this obj] "convert an object to serialized form.")
@@ -54,6 +54,6 @@
 (defrecord EdnObjectMarshaller
   []
   ObjectMarshaller
-  (marshal [this obj] (-marshal obj))
-  (unmarshal [this obj] (-unmarshal obj)))
+  (marshal [this obj] (marshal-data obj))
+  (unmarshal [this obj] (unmarshal-data obj)))
 

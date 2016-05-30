@@ -67,14 +67,13 @@
               :else
               (throw (IllegalStateException. (str "No such message format: " (pr-str msg))))))
           (fn [msg']
-            (try
-              (>!! ch (box msg'))
-              (finally
-                (close! ch)))))
+            (>!! ch (box msg'))))
 
         (d/catch
           (fn [th]
-            (>!! ch (box th)))))
+            (>!! ch (box th))))
+        (d/finally
+          (fn [] (close! ch))))
     ch))
 
 (def ^:dynamic *default-finder*)

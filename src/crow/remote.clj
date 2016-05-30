@@ -2,8 +2,9 @@
   (:refer-clojure :exclude [send])
   (:require [crow.protocol :refer [remote-call call-result? call-exception? protocol-error?]]
             [crow.request :refer [send] :as request]
+            [crow.boxed :refer [box unbox]]
             [manifold.deferred :refer [chain] :as d]
-            [clojure.core.async :refer [>!! chan <!! close!]]
+            [clojure.core.async :refer [>!! chan <!! <! close!]]
             [crow.discovery :refer [discover service-finder]]
             [crow.logging :refer [debug-pr]]
             [clojure.tools.logging :as log]
@@ -67,14 +68,13 @@
               (throw (IllegalStateException. (str "No such message format: " (pr-str msg))))))
           (fn [msg']
             (try
-              (when-not (nil? msg')
-                (>!! ch msg'))
+              (>!! ch (box msg'))
               (finally
                 (close! ch)))))
 
         (d/catch
           (fn [th]
-            (>!! ch th))))
+            (>!! ch (box th)))))
     ch))
 
 (def ^:dynamic *default-finder*)
@@ -163,15 +163,14 @@
    this macro will block current thread."
   [ch]
   (when ch
-    ;; if no data is supplied to ch until 4* msecs of *send-receive-timeout*,
-    ;; it should be a bug... (because invoke will retry only 3 times)
     (let [result (<!! ch)]
-      (cond
-        (instance? Throwable result)
-        (throw result)
+      (unbox result))))
 
-        :else
-        result))))
+(defn <!+
+  [ch]
+  (when ch
+    (let [result (<! ch)]
+      (unbox result))))
 
 (s/defn ^:private make-call-fn
   [ch

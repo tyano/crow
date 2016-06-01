@@ -162,13 +162,13 @@
    this macro will block current thread."
   [ch]
   (when ch
-    (let [result (<!! ch)]
+    (when-let [result (<!! ch)]
       (unbox result))))
 
 (defn <!+
   [ch]
   (when ch
-    (let [result (<! ch)]
+    (when-let [result (<! ch)]
       (unbox result))))
 
 (s/defn ^:private make-call-fn

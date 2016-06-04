@@ -2,7 +2,7 @@
   (:refer-clojure :exclude [send])
   (:require [crow.protocol :refer [remote-call call-result? call-exception? protocol-error?]]
             [crow.request :refer [send] :as request]
-            [crow.boxed :refer [box unbox]]
+            [crow.boxed :refer [box unbox service-info]]
             [manifold.deferred :refer [chain] :as d]
             [clojure.core.async :refer [>!! chan <!! <! close!]]
             [crow.discovery :refer [discover service-finder]]
@@ -35,8 +35,22 @@
 (def CallOptions {(s/optional-key :timeout-ms) s/Num
                   s/Keyword s/Any})
 
+
+(def ^:private found-services (atom {}))
+
+(defn remove-service-from-cache
+  [service-desc service]
+  (when (and service-desc service)
+    (swap! found-services update service-desc disj service)))
+
+(defn update-services-in-cache
+  [service-desc services]
+  (when (and service-desc (seq services))
+    (swap! found-services assoc service-desc (set services))))
+
 (s/defn invoke
-  [ch
+  [ch :- s/Any
+   service-desc :- ServiceDescriptor
    {:keys [address port] :as service} :- Service
    {:keys [target-ns fn-name args]} :- CallDescriptor
    {:keys [timeout-ms send-retry-count send-retry-interval-ms], :or {send-retry-count 3, send-retry-interval-ms 500}} :- DiscoveryOptions]
@@ -67,11 +81,11 @@
               :else
               (throw (IllegalStateException. (str "No such message format: " (pr-str msg))))))
           (fn [msg']
-            (>!! ch (box msg'))))
+            (>!! ch (box service-desc service msg'))))
 
         (d/catch
           (fn [th]
-            (>!! ch (box th))))
+            (>!! ch (box service-desc service th))))
         (d/finally
           (fn [] (close! ch))))
     ch))
@@ -103,14 +117,25 @@
    options      :- DiscoveryOptions]
   (first (shuffle (find-services service-desc options))))
 
+(defn find-service-with-cache
+  [service-desc options]
+  (when-let [services
+      (seq
+        (if-let [cached-services (seq (get @found-services service-desc))]
+          cached-services
+          (when-let [new-services (seq (find-services service-desc options))]
+            (update-services-in-cache service-desc new-services)
+            new-services)))]
+    (first (shuffle services))))
+
 (s/defn async-fn :- s/Any
   [ch
    service-desc :- ServiceDescriptor
    call-desc    :- CallDescriptor
    options      :- CallOptions]
   (debug-pr (str "remote call. service: " (pr-str service-desc) ", fn: " (pr-str call-desc)))
-  (if-let [service (find-service service-desc options)]
-    (invoke ch service call-desc options)
+  (if-let [service (find-service-with-cache service-desc options)]
+    (invoke ch service-desc service call-desc options)
     (throw (IllegalStateException. (format "Service Not Found: service-name=%s, attributes=%s"
                                       (:service-name service-desc)
                                       (pr-str (:attributes service-desc)))))))
@@ -154,6 +179,15 @@
   ([service-namespace attributes call-list options]
     `(async (chan) ~service-namespace ~attributes ~call-list ~options)))
 
+(defn- handle-result
+  [result]
+  (try
+    (unbox result)
+    (catch Throwable th
+      (when-let [[service service-desc] (service-info result)]
+        (remove-service-from-cache service-desc service))
+      (throw th))))
+
 (defn <!!+
   "read a channel and if the result value is an instance of
    Throwable, then throw the exception. Otherwise returns the
@@ -163,13 +197,13 @@
   [ch]
   (when ch
     (when-let [result (<!! ch)]
-      (unbox result))))
+      (handle-result result))))
 
 (defn <!+
   [ch]
   (when ch
     (when-let [result (<! ch)]
-      (unbox result))))
+      (handle-result result))))
 
 (s/defn ^:private make-call-fn
   [ch
@@ -259,7 +293,7 @@
 (defmacro with-service
   ([ch service call-list opts]
    `(let [[service-desc# call-desc#] (parse-call-list ~call-list)]
-      (invoke ~ch ~service call-desc# ~opts)))
+      (invoke ~ch service-desc# ~service call-desc# ~opts)))
 
   ([service call-list opts]
     `(with-service (chan) ~service ~call-list ~opts)))

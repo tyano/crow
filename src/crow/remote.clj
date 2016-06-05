@@ -5,7 +5,8 @@
             [crow.boxed :refer [box unbox service-info]]
             [manifold.deferred :refer [chain] :as d]
             [clojure.core.async :refer [>!! chan <!! <! close!]]
-            [crow.discovery :refer [discover service-finder]]
+            [crow.discovery :refer [discover]]
+            [crow.service-finder :refer [standard-service-finder]]
             [crow.logging :refer [debug-pr]]
             [clojure.tools.logging :as log]
             [slingshot.slingshot :refer [try+ throw+]]
@@ -94,7 +95,7 @@
 
 (defn start-service-finder
   [registrar-source]
-  (def ^:dynamic *default-finder* (service-finder registrar-source)))
+  (def ^:dynamic *default-finder* (standard-service-finder registrar-source)))
 
 (defn with-finder-fn
   [finder f]

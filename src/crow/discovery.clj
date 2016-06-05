@@ -1,69 +1,17 @@
 (ns crow.discovery
   (:refer-clojure :exclude [send])
-  (:require [crow.protocol :refer [discovery service-found? service-not-found? ping ack? call-exception?]]
+  (:require [crow.protocol :refer [discovery service-found? service-not-found? call-exception?]]
             [crow.request :as request]
             [crow.registrar-source :as source]
             [crow.service :as service]
             [crow.request :as request]
-            [clojure.set :refer [difference]]
+            [crow.service-finder :refer [reset-registrars! abandon-registrar!]]
             [aleph.tcp :as tcp]
-            [manifold.deferred :refer [let-flow chain] :as d]
+            [manifold.deferred :refer [chain] :as d]
             [clojure.tools.logging :as log]
             [slingshot.slingshot :refer [throw+]]
-            [clojure.core.async :refer [thread go-loop timeout <!]]
             [crow.logging :refer [trace-pr info-pr]]))
 
-(def ^:dynamic *dead-registrar-check-interval-ms* 30000)
-
-
-
-;;; checker thread for dead registrars.
-;;; If a dead registrar revived, it will return 'ack' for 'ping' request.
-;;; If 'ack' is returned, remove the registrar from dead-registrars ref and
-;;; add it into active-registrars.
-(defn- start-check-dead-registrars-task
-  [finder]
-  (go-loop []
-    (let [current-dead-registrars @(:dead-registrars finder)]
-      (doseq [{:keys [address port] :as registrar} current-dead-registrars]
-        (try
-          (trace-pr "checking: " registrar)
-          (let [msg @(request/send address port (ping) nil)]
-            (if (ack? msg)
-              (do
-                (info-pr "registrar revived: " registrar)
-                (dosync
-                  (alter (:dead-registrars finder) disj registrar)
-                  (alter (:active-registrars finder) conj registrar)))
-              (log/error (str "Invalid response:" msg))))
-          (catch Throwable e
-            (log/debug e))))
-      (<! (timeout *dead-registrar-check-interval-ms*))
-      (recur))))
-
-(defrecord ServiceFinder [registrar-source active-registrars dead-registrars])
-
-(defn service-finder
-  [registrar-source]
-  (let [finder (ServiceFinder. registrar-source (ref #{}) (ref #{}))]
-    (start-check-dead-registrars-task finder)
-    finder))
-
-
-(defn- reset-registrars!
-  [finder]
-  (let [new-registrars (source/registrars (:registrar-source finder))]
-    (dosync
-      (alter (:active-registrars finder)
-        (fn [_]
-          (difference (set new-registrars) @(:dead-registrars finder)))))))
-
-(defn- abandon-registrar!
-  [finder reg]
-  (dosync
-    (let [other-reg (first (shuffle (alter (:active-registrars finder) disj reg)))]
-      (alter (:dead-registrars finder) conj reg)
-      other-reg)))
 
 (defn- discover-with
   [finder

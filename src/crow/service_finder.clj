@@ -157,7 +157,7 @@
           (into {}
             (map
               (fn [[service-desc service-coll]]
-                [service-desc (filter #(not= service %) service-coll)])
+                [service-desc (set (filter #(not= service %) service-coll))])
               service-map))))
       false)))
 

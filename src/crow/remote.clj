@@ -6,7 +6,7 @@
             [manifold.deferred :refer [chain] :as d]
             [clojure.core.async :refer [>!! chan <!! <! close!]]
             [crow.discovery :refer [discover]]
-            [crow.service-finder :refer [standard-service-finder]]
+            [crow.service-finder :refer [standard-service-finder] :as finder]
             [crow.logging :refer [debug-pr]]
             [clojure.tools.logging :as log]
             [slingshot.slingshot :refer [try+ throw+]]
@@ -35,19 +35,6 @@
 
 (def CallOptions {(s/optional-key :timeout-ms) s/Num
                   s/Keyword s/Any})
-
-
-(def ^:private found-services (atom {}))
-
-(defn remove-service-from-cache
-  [service-desc service]
-  (when (and service-desc service)
-    (swap! found-services update service-desc disj service)))
-
-(defn update-services-in-cache
-  [service-desc services]
-  (when (and service-desc (seq services))
-    (swap! found-services assoc service-desc (set services))))
 
 (s/defn invoke
   [ch :- s/Any
@@ -93,9 +80,10 @@
 
 (def ^:dynamic *default-finder*)
 
-(defn start-service-finder
-  [registrar-source]
-  (def ^:dynamic *default-finder* (standard-service-finder registrar-source)))
+(defn register-service-finder
+  [finder]
+  {:pre [finder]}
+  (def ^:dynamic *default-finder* finder))
 
 (defn with-finder-fn
   [finder f]
@@ -107,27 +95,16 @@
   `(with-finder-fn ~finder (fn [] ~@expr)))
 
 (s/defn find-services :- [Service]
-  [{:keys [service-name attributes]} :- ServiceDescriptor
+  [service-desc :- ServiceDescriptor
    options :- DiscoveryOptions]
   (when-not *default-finder*
     (throw+ {:type :finder-not-found, :message "ServiceFinder doesn't exist! You must start a service finder by start-service-finder at first!"}))
-  (discover *default-finder* service-name attributes options))
+  (discover *default-finder* service-desc options))
 
 (s/defn find-service :- Service
   [service-desc :- ServiceDescriptor
    options      :- DiscoveryOptions]
   (first (shuffle (find-services service-desc options))))
-
-(defn find-service-with-cache
-  [service-desc options]
-  (when-let [services
-      (seq
-        (if-let [cached-services (seq (get @found-services service-desc))]
-          cached-services
-          (when-let [new-services (seq (find-services service-desc options))]
-            (update-services-in-cache service-desc new-services)
-            new-services)))]
-    (first (shuffle services))))
 
 (s/defn async-fn :- s/Any
   [ch
@@ -135,7 +112,7 @@
    call-desc    :- CallDescriptor
    options      :- CallOptions]
   (debug-pr (str "remote call. service: " (pr-str service-desc) ", fn: " (pr-str call-desc)))
-  (if-let [service (find-service-with-cache service-desc options)]
+  (if-let [service (find-service service-desc options)]
     (invoke ch service-desc service call-desc options)
     (throw (IllegalStateException. (format "Service Not Found: service-name=%s, attributes=%s"
                                       (:service-name service-desc)
@@ -180,31 +157,37 @@
   ([service-namespace attributes call-list options]
     `(async (chan) ~service-namespace ~attributes ~call-list ~options)))
 
-(defn- handle-result
+(defn handle-result
   [result]
   (try
     (unbox result)
     (catch Throwable th
       (when-let [[service service-desc] (service-info result)]
-        (remove-service-from-cache service-desc service))
+        (finder/remove-service *default-finder* service-desc service))
       (throw th))))
 
 (defn <!!+
-  "read a channel and if the result value is an instance of
+  "read a channel. if the result value is an instance of
    Throwable, then throw the exception. Otherwise returns the
    result.
-   This macro is a kind of <!! macro of core.async, so calling
-   this macro will block current thread."
+   This fn is a kind of <!! macro of core.async, so calling
+   this fn will block current thread."
   [ch]
   (when ch
     (when-let [result (<!! ch)]
       (handle-result result))))
 
-(defn <!+
+(defmacro <!+
+  "read a channel. if the result value is an instance of
+   Throwable, then throw the exception. Otherwise returns the
+   result.
+   This macro is a kind of <! macro of core.async, so this macro
+   must be called in (go) block. it it why this is a macro, not fn.
+   all contents of this macro is expanded into a go block."
   [ch]
-  (when ch
-    (when-let [result (<! ch)]
-      (handle-result result))))
+  `(when-let [ch# ~ch]
+      (when-let [result# (<! ch#)]
+        (handle-result result#))))
 
 (s/defn ^:private make-call-fn
   [ch

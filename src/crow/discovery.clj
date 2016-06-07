@@ -5,7 +5,7 @@
             [crow.registrar-source :as source]
             [crow.service :as service]
             [crow.request :as request]
-            [crow.service-finder :refer [reset-registrars! abandon-registrar!]]
+            [crow.service-finder :refer [reset-registrars! abandon-registrar!] :as finder]
             [aleph.tcp :as tcp]
             [manifold.deferred :refer [chain] :as d]
             [clojure.tools.logging :as log]
@@ -16,11 +16,10 @@
 (defn- discover-with
   [finder
    {:keys [address port] :as registrar}
-   service-name
-   attribute
+   {:keys [service-name attributes] :as service-desc}
    {:keys [timeout-ms send-retry-count send-retry-interval-ms] :or {timeout-ms Long/MAX_VALUE send-retry-count 3 send-retry-interval-ms (long 500)} :as options}]
   (trace-pr "options:" options)
-  (let [req     (discovery service-name attribute)
+  (let [req     (discovery service-name attributes)
         result  @(-> (request/send address port req timeout-ms send-retry-count send-retry-interval-ms)
                     (chain
                       (fn [msg]
@@ -53,18 +52,24 @@
                             (throw th))))]
     (if (instance? Throwable result)
       (throw result)
-      result)))
+      (do
+        (finder/reset-services finder service-desc result)
+        result))))
 
 (defn discover
-  [finder service-name attribute options]
-  (when-not (seq @(:active-registrars finder))
-    (reset-registrars! finder))
-  (if-let [registrars (seq @(:active-registrars finder))]
-    (loop [regs (shuffle registrars) result nil]
-      (cond
-        result result
-        (not (seq regs)) (throw+ {:type ::service-not-found, :source (:registrar-source finder)})
-        :else (let [reg (first regs)]
-                (recur (rest regs) (discover-with finder reg service-name attribute options)))))
-    (throw+ {:type ::registrar-doesnt-exist, :source (:registrar-source finder)})))
+  [finder {:keys [service-name attributes] :as service-desc} options]
+  ;; find services from a cache if finder has a cache.
+  (if-let [services (seq (finder/find-services finder service-desc))]
+    services
+    (do
+      (when-not (seq @(:active-registrars finder))
+        (reset-registrars! finder))
+      (if-let [registrars (seq @(:active-registrars finder))]
+        (loop [regs (shuffle registrars) result nil]
+          (cond
+            result result
+            (not (seq regs)) (throw+ {:type ::service-not-found, :source (:registrar-source finder)})
+            :else (let [reg (first regs)]
+                    (recur (rest regs) (discover-with finder reg service-desc options)))))
+        (throw+ {:type ::registrar-doesnt-exist, :source (:registrar-source finder)})))))
 

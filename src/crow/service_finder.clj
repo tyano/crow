@@ -117,6 +117,7 @@
   (reset-services
     [finder service-desc service-coll]
     (when service-desc
+      (trace-pr "reset-services - service-desc : services: " [service-desc service-coll])
       (swap! service-map assoc service-desc (set service-coll)))
     finder)
 
@@ -129,7 +130,9 @@
   (find-services
     [finder service-desc]
     (when service-desc
-      (get @service-map service-desc))))
+      (let [services (get @service-map service-desc)]
+        (trace-pr "find-services - service-desc : found-services: " [service-desc services])
+        services))))
 
 (defn cached-service-finder
   [registrar-source]

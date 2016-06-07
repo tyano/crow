@@ -2,10 +2,11 @@
   (:refer-clojure :exclude [send])
   (:require [crow.protocol :refer [remote-call call-result? call-exception? protocol-error?]]
             [crow.request :refer [send] :as request]
-            [crow.boxed :refer [box unbox]]
+            [crow.boxed :refer [box unbox service-info]]
             [manifold.deferred :refer [chain] :as d]
             [clojure.core.async :refer [>!! chan <!! <! close!]]
-            [crow.discovery :refer [discover service-finder]]
+            [crow.discovery :refer [discover]]
+            [crow.service-finder :refer [standard-service-finder] :as finder]
             [crow.logging :refer [debug-pr]]
             [clojure.tools.logging :as log]
             [slingshot.slingshot :refer [try+ throw+]]
@@ -36,7 +37,8 @@
                   s/Keyword s/Any})
 
 (s/defn invoke
-  [ch
+  [ch :- s/Any
+   service-desc :- ServiceDescriptor
    {:keys [address port] :as service} :- Service
    {:keys [target-ns fn-name args]} :- CallDescriptor
    {:keys [timeout-ms send-retry-count send-retry-interval-ms], :or {send-retry-count 3, send-retry-interval-ms 500}} :- DiscoveryOptions]
@@ -67,20 +69,21 @@
               :else
               (throw (IllegalStateException. (str "No such message format: " (pr-str msg))))))
           (fn [msg']
-            (>!! ch (box msg'))))
+            (>!! ch (box service-desc service msg'))))
 
         (d/catch
           (fn [th]
-            (>!! ch (box th))))
+            (>!! ch (box service-desc service th))))
         (d/finally
           (fn [] (close! ch))))
     ch))
 
 (def ^:dynamic *default-finder*)
 
-(defn start-service-finder
-  [registrar-source]
-  (def ^:dynamic *default-finder* (service-finder registrar-source)))
+(defn register-service-finder
+  [finder]
+  {:pre [finder]}
+  (def ^:dynamic *default-finder* finder))
 
 (defn with-finder-fn
   [finder f]
@@ -92,11 +95,11 @@
   `(with-finder-fn ~finder (fn [] ~@expr)))
 
 (s/defn find-services :- [Service]
-  [{:keys [service-name attributes]} :- ServiceDescriptor
+  [service-desc :- ServiceDescriptor
    options :- DiscoveryOptions]
   (when-not *default-finder*
     (throw+ {:type :finder-not-found, :message "ServiceFinder doesn't exist! You must start a service finder by start-service-finder at first!"}))
-  (discover *default-finder* service-name attributes options))
+  (discover *default-finder* service-desc options))
 
 (s/defn find-service :- Service
   [service-desc :- ServiceDescriptor
@@ -110,7 +113,7 @@
    options      :- CallOptions]
   (debug-pr (str "remote call. service: " (pr-str service-desc) ", fn: " (pr-str call-desc)))
   (if-let [service (find-service service-desc options)]
-    (invoke ch service call-desc options)
+    (invoke ch service-desc service call-desc options)
     (throw (IllegalStateException. (format "Service Not Found: service-name=%s, attributes=%s"
                                       (:service-name service-desc)
                                       (pr-str (:attributes service-desc)))))))
@@ -154,22 +157,37 @@
   ([service-namespace attributes call-list options]
     `(async (chan) ~service-namespace ~attributes ~call-list ~options)))
 
+(defn handle-result
+  [result]
+  (try
+    (unbox result)
+    (catch Throwable th
+      (when-let [[service service-desc] (service-info result)]
+        (finder/remove-service *default-finder* service-desc service))
+      (throw th))))
+
 (defn <!!+
-  "read a channel and if the result value is an instance of
+  "read a channel. if the result value is an instance of
    Throwable, then throw the exception. Otherwise returns the
    result.
-   This macro is a kind of <!! macro of core.async, so calling
-   this macro will block current thread."
+   This fn is a kind of <!! macro of core.async, so calling
+   this fn will block current thread."
   [ch]
   (when ch
     (when-let [result (<!! ch)]
-      (unbox result))))
+      (handle-result result))))
 
-(defn <!+
+(defmacro <!+
+  "read a channel. if the result value is an instance of
+   Throwable, then throw the exception. Otherwise returns the
+   result.
+   This macro is a kind of <! macro of core.async, so this macro
+   must be called in (go) block. it it why this is a macro, not fn.
+   all contents of this macro is expanded into a go block."
   [ch]
-  (when ch
-    (when-let [result (<! ch)]
-      (unbox result))))
+  `(when-let [ch# ~ch]
+      (when-let [result# (<! ch#)]
+        (handle-result result#))))
 
 (s/defn ^:private make-call-fn
   [ch
@@ -259,7 +277,7 @@
 (defmacro with-service
   ([ch service call-list opts]
    `(let [[service-desc# call-desc#] (parse-call-list ~call-list)]
-      (invoke ~ch ~service call-desc# ~opts)))
+      (invoke ~ch service-desc# ~service call-desc# ~opts)))
 
   ([service call-list opts]
     `(with-service (chan) ~service ~call-list ~opts)))

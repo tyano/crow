@@ -151,7 +151,7 @@
     (catch Throwable th
       ;; a service doesn't respond.
       ;; remove the service from a cache
-      (log/info (str "service " service " is dead."))
+      (log/info th (str "service " service " is dead."))
       (swap! (:service-map finder)
         (fn [service-map]
           (into {}

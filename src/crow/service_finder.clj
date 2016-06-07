@@ -5,7 +5,8 @@
             [crow.request :as request]
             [crow.registrar-source :as source]
             [clojure.tools.logging :as log]
-            [crow.logging :refer [trace-pr info-pr]]))
+            [crow.logging :refer [trace-pr info-pr]]
+            [manifold.deferred :refer [chain] :as d]))
 
 (def ^:dynamic *dead-registrar-check-interval-ms* 30000)
 
@@ -134,11 +135,54 @@
         (trace-pr "find-services - service-desc : found-services: " [service-desc services])
         services))))
 
+(defn- send-ping
+  [finder {:keys [address port] :as service} timeout-ms send-retry-count send-retry-interval-ms]
+  (try
+    (let [req (ping)]
+      @(-> (request/send address port req timeout-ms send-retry-count send-retry-interval-ms)
+           (chain
+             (fn [resp]
+               (cond
+                 (ack? resp)
+                 true
+
+                 :else
+                 (throw (IllegalStateException. "Unknown response")))))))
+    (catch Throwable th
+      ;; a service doesn't respond.
+      ;; remove the service from a cache
+      (log/info (str "service " service " is dead."))
+      (swap! (:service-map finder)
+        (fn [service-map]
+          (into {}
+            (map
+              (fn [[service-desc service-coll]]
+                [service-desc (filter #(not= service %) service-coll)])
+              service-map))))
+      false)))
+
+(defn- check-cached-services
+  [finder timeout-ms send-retry-count send-retry-interval-ms]
+  (let [service-map @(:service-map finder)
+        services    (distinct (apply concat (vals service-map)))]
+    (doseq [service services]
+      (send-ping finder service timeout-ms send-retry-count send-retry-interval-ms))))
+
+(defn start-check-cached-services-task
+  "Check the activity of cached services and if services are down, remove the services from a cache."
+  [cached-finder check-interval-ms timeout-ms send-retry-count send-retry-interval-ms]
+  (go-loop []
+    (check-cached-services cached-finder timeout-ms send-retry-count send-retry-interval-ms)
+    (<! (timeout check-interval-ms))
+    (recur)))
+
 (defn cached-service-finder
-  [registrar-source]
+  [registrar-source check-interval-ms timeout-ms send-retry-count send-retry-interval-ms]
   {:pre [registrar-source]}
-  (-> (CachedServiceFinder. (atom {}))
-    (init-service-finder registrar-source)))
+  (let [finder (-> (CachedServiceFinder. (atom {}))
+                 (init-service-finder registrar-source))]
+    (start-check-cached-services-task finder check-interval-ms timeout-ms send-retry-count send-retry-interval-ms)
+    finder))
 
 
 

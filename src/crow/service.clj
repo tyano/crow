@@ -3,7 +3,7 @@
             [aleph.netty :as netty]
             [manifold.stream :refer [connect buffer] :as s]
             [manifold.deferred :refer [let-flow] :as d]
-            [crow.protocol :refer [remote-call? invalid-message protocol-error call-result call-exception] :as p]
+            [crow.protocol :refer [remote-call? ping? invalid-message protocol-error call-result call-exception ack] :as p]
             [crow.request :refer [frame-decorder wrap-duplex-stream format-stack-trace] :as request]
             [crow.join-manager :refer [start-join-manager join]]
             [clojure.tools.logging :as log]
@@ -64,6 +64,7 @@
 (defn- handle-request
   [service msg]
   (cond
+    (ping? msg)        (do (log/trace "received a ping.") (ack))
     (remote-call? msg) (handle-remote-call (:public-ns-set service) msg)
     :else (invalid-message msg)))
 

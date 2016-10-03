@@ -5,14 +5,14 @@
             :url "http://www.eclipse.org/legal/epl-v10.html"}
   :dependencies [[org.clojure/clojure "1.8.0"]
                  [aleph "0.4.1" :exclusions [manifold]]
-                 [manifold "0.1.3"]
+                 [manifold "0.1.5"]
                  [clojure-msgpack "1.2.0"]
-                 [clj-time "0.11.0"]
-                 [org.clojure/core.async "0.2.374"]
+                 [clj-time "0.12.0"]
+                 [org.clojure/core.async "0.2.391"]
                  [org.clojure/tools.logging "0.3.1"]
                  [slingshot "0.12.2"]
                  [com.shelf/messagepack-framedecoder "1.0-SNAPSHOT"]
-                 [prismatic/schema "1.1.1"]
+                 [prismatic/schema "1.1.3"]
                  [ns-tracker "0.3.0"]]
   :plugins [[lein-midje "3.2"]]
   :repositories {"javelindev-snapshots" "http://javelindev.jp/repository/snapshots"}

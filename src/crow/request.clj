@@ -10,7 +10,8 @@
             [byte-streams :refer [to-byte-array]]
             [schema.core :as s]
             [crow.logging :refer [trace-pr]]
-            [slingshot.slingshot :refer [try+ throw+]])
+            [slingshot.slingshot :refer [try+ throw+]]
+            [async-connect.box :as box])
   (:import [com.shelf.messagepack MessagePackFrameDecoder]
            [msgpack.core Ext]
            [java.net ConnectException]))
@@ -62,10 +63,7 @@
 (defn read-message
   "unpack a byte-array to a message format."
   [data]
-  (case data
-    drained data
-    timeout data
-    (unpack-message data)))
+  (when data (unpack-message data)))
 
 (defn recv!
   "read from stream and unpack the received bytes.
@@ -74,6 +72,9 @@
   (if timeout-ms
     (try-take! stream drained timeout-ms timeout)
     (take! stream drained)))
+
+(def packer (map #(update % :message pack)))
+(def unpacker (map #(box/update % read-message)))
 
 (defn wrap-duplex-stream
   [stream]

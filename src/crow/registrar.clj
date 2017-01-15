@@ -1,9 +1,6 @@
 (ns crow.registrar
-  (:require [async-connect.server :refer [run-server]]
-            [aleph.tcp :refer [start-server] :as tcp]
-            [aleph.netty :as netty]
-            [manifold.deferred :refer [let-flow chain] :as d]
-            [manifold.stream :refer [connect buffer] :as s]
+  (:require [async-connect.server :refer [run-server close-wait]]
+            [async-connect.box :refer [boxed]]
             [clj-time.core :refer [now after? plus millis] :as t]
             [crow.protocol :refer [lease lease-expired registration invalid-message
                                    join-request? heart-beat? discovery? ping?
@@ -14,12 +11,10 @@
             [crow.service :as sv]
             [clojure.tools.logging :as log]
             [crow.logging :refer [trace-pr debug-pr info-pr]]
-            [byte-streams :refer [to-byte-array]]
             [clojure.set :refer [superset?]]
             [crow.utils :refer [extract-exception]]
             [slingshot.support :refer [get-context]]
-            [clojure.core.async :refer [chan go-loop thread <! >! <!! >!!]]
-            [async-connect.box :refer [boxed]])
+            [clojure.core.async :refer [chan go-loop thread <! >! <!! >!!]])
   (:import [java.util UUID]
            [io.netty.handler.codec.bytes
               ByteArrayDecoder
@@ -184,13 +179,14 @@
 
   (let [registrar (new-registrar name renewal-ms watch-interval)]
     (process-registrar registrar)
-    (log/info (str "#### STARTING REGISTRAR SERVICE (name: " (pr-str name) " port: " port ")"))
-    (run-server
-       {:server.config/port port
-        :server.config/channel-initializer channel-initializer
-        :server.config/read-channel-builder #(chan 50 unpacker)
-        :server.config/write-channel-builder #(chan 50 packer)
-        :server.config/server-handler (make-registrar-handler registrar renewal-ms)})))
+    (let [server (run-server
+                   {:server.config/port port
+                    :server.config/channel-initializer channel-initializer
+                    :server.config/read-channel-builder #(chan 50 unpacker)
+                    :server.config/write-channel-builder #(chan 50 packer)
+                    :server.config/server-handler (make-registrar-handler registrar renewal-ms)})]
+      (log/info (str "#### REGISTRAR SERVICE (name: " (pr-str name) " port: " port ") starts."))
+      server)))
 
 
 (defn -main
@@ -205,7 +201,5 @@
                               (throw (IllegalArgumentException. (str "Unknown option: " k))))))
           server (start-registrar-service
                     (merge {:port (Long/valueOf port-str), :name name} optmap))]
-      (.. (Runtime/getRuntime) (addShutdownHook (Thread. (fn [] (.close server) (println "SERVER STOPPED.")))))
-      (while true
-        (Thread/sleep 1000)))))
+      (close-wait server #(println "SERVER STOPPED.")))))
 

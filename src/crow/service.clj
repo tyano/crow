@@ -1,10 +1,9 @@
 (ns crow.service
-  (:require [aleph.tcp :as tcp]
-            [aleph.netty :as netty]
-            [manifold.stream :refer [connect buffer] :as s]
-            [manifold.deferred :refer [let-flow] :as d]
+  (:require [async-connect.server :refer [run-server close-wait]]
+            [async-connect.box :refer [boxed]]
+            [clojure.core.async :refer [chan go-loop thread <! >! <!! >!!]]
             [crow.protocol :refer [remote-call? ping? invalid-message protocol-error call-result call-exception ack] :as p]
-            [crow.request :refer [frame-decorder wrap-duplex-stream format-stack-trace] :as request]
+            [crow.request :refer [frame-decorder wrap-duplex-stream format-stack-trace packer unpacker] :as request]
             [crow.join-manager :refer [start-join-manager join]]
             [clojure.tools.logging :as log]
             [crow.logging :refer [trace-pr]]
@@ -12,7 +11,10 @@
             [crow.id-store :refer [->FileIdStore] :as id]
             [slingshot.slingshot :refer [try+]]
             [crow.utils :refer [extract-exception]]
-            [slingshot.support :refer [get-context]]))
+            [slingshot.support :refer [get-context]])
+  (:import [io.netty.handler.codec.bytes
+              ByteArrayDecoder
+              ByteArrayEncoder]))
 
 
 (defrecord Service
@@ -68,59 +70,55 @@
     (remote-call? msg) (handle-remote-call (:public-ns-set service) msg)
     :else (invalid-message msg)))
 
-(defn- service-handler
-  [service stream info timeout-ms & [{:keys [middleware]}]]
-  (->
-    (d/loop []
-      (-> (s/try-take! stream ::none timeout-ms ::none)
-        (d/chain
-          (fn [msg]
-            (if (= ::none msg)
-              ::none
-              (d/future
-                (if middleware
-                  (let [wrapper-fn (middleware (partial handle-request service))]
-                    (wrapper-fn msg))
-                  (handle-request service msg)))))
-          (fn [msg']
-            (when-not (= ::none msg')
-              (s/try-put! stream msg' timeout-ms ::timeout)))
-          (fn [result]
-            (when (some? result)
-              (cond
-                (= result ::timeout)
-                (log/error "Service Timeout: Couldn't write response.")
-
-                (true? result)
-                (d/recur)
-
-                :else
-                (log/error "Service Error: Couldn't write response.")))))
-        (d/catch
-          (fn [ex]
+(defn- make-service-handler
+  [service timeout-ms & [{:keys [middleware]}]]
+  (fn [read-ch write-ch]
+    (go-loop []
+      (when-let [msg (<! read-ch)]
+        (try
+          (let [result (<! (thread
+                              (boxed
+                                (try
+                                  (if middleware
+                                    (let [wrapper-fn (middleware (partial handle-request service))]
+                                      (wrapper-fn msg))
+                                    (handle-request service msg))
+                                  (catch Throwable th th)))))]
+            (>! write-ch {:message @result, :flush? true}))
+          (catch Throwable ex
             (log/error ex "An Error ocurred.")
-            (let [[type throwable] (extract-exception (get-context ex))]
-              (s/try-put! stream (call-exception type (format-stack-trace throwable)) timeout-ms)
-              nil)))))
-    (d/finally
-      (fn []
-        (s/close! stream)))))
+            (let [[type throwable] (extract-exception (get-context ex))
+                  ex-msg (call-exception type (format-stack-trace throwable))]
+              (>! write-ch {:message ex-msg, :flush? true}))))
+        (recur)))))
+
+
+(defn- channel-initializer
+  [netty-ch config]
+  (.. netty-ch
+    (pipeline)
+    (addLast "messagepack-framedecoder" (frame-decorder))
+    (addLast "bytes-decoder" (ByteArrayDecoder.))
+    (addLast "bytes-encoder" (ByteArrayEncoder.))))
+
 
 (defn start-service
   [{:keys [address port name attributes id-store public-namespaces registrar-source
            fetch-registrar-interval-ms heart-beat-buffer-ms dead-registrar-check-interval
            rejoin-interval-ms send-recv-timeout
            send-retry-count send-retry-interval-ms]
-      :or {address "localhost" attributes {} send-recv-timeout nil send-retry-count 3 send-retry-interval-ms 500} :as config}]
+      :or {address "localhost" attributes {} send-recv-timeout nil send-retry-count 3 send-retry-interval-ms 500}
+      :as config}]
   {:pre [port (not (clojure.string/blank? name)) id-store (seq public-namespaces) registrar-source fetch-registrar-interval-ms heart-beat-buffer-ms]}
   (apply require (map symbol public-namespaces))
   (let [sid     (id/read id-store)
         service (new-service address port sid name attributes id-store (set public-namespaces))
-        server  (tcp/start-server
-                  (fn [stream info]
-                    (service-handler service (wrap-duplex-stream stream) info send-recv-timeout (select-keys config [:middleware])))
-                  {:port port
-                   :pipeline-transform #(.addFirst % "framer" (frame-decorder))})
+        server  (run-server
+                  {:server.config/port port
+                   :server.config/channel-initializer channel-initializer
+                   :server.config/read-channel-builder #(chan 50 unpacker)
+                   :server.config/write-channel-builder #(chan 50 packer)
+                   :server.config/server-handler (make-service-handler service send-recv-timeout config)})
         join-mgr (start-join-manager registrar-source
                                      fetch-registrar-interval-ms
                                      dead-registrar-check-interval
@@ -130,7 +128,7 @@
                                      send-retry-count
                                      send-retry-interval-ms)]
     (join join-mgr service)
-    (log/info (str "#### SERVICE (name: " name ", port: " (netty/port server) ") starts."))
+    (log/info (str "#### SERVICE (name: " name ", port: " port ") starts."))
     server))
 
 (defn -main
@@ -149,6 +147,4 @@
                 :dead-registrar-check-interval 10000
                 :rejoin-interval-ms 10000}
         server (start-service config)]
-    (.. (Runtime/getRuntime) (addShutdownHook (Thread. (fn [] (.close server) (println "SERVER STOPPED.")))))
-    (while true
-      (Thread/sleep 1000))))
+    (close-wait server #(println "SERVER STOPPED."))))

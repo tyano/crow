@@ -1,7 +1,7 @@
 (ns crow.service
   (:require [async-connect.server :refer [run-server close-wait]]
             [async-connect.box :refer [boxed]]
-            [clojure.core.async :refer [chan go-loop thread <! >! <!! >!!]]
+            [clojure.core.async :refer [chan go-loop thread <! >! <!! >!! alt! alts! timeout]]
             [crow.protocol :refer [remote-call? ping? invalid-message protocol-error call-result call-exception ack] :as p]
             [crow.request :refer [frame-decorder wrap-duplex-stream format-stack-trace packer unpacker] :as request]
             [crow.join-manager :refer [start-join-manager join]]
@@ -75,22 +75,34 @@
   (fn [read-ch write-ch]
     (go-loop []
       (when-let [msg (<! read-ch)]
-        (try
-          (let [result (<! (thread
-                              (boxed
-                                (try
-                                  (if middleware
-                                    (let [wrapper-fn (middleware (partial handle-request service))]
-                                      (wrapper-fn msg))
-                                    (handle-request service msg))
-                                  (catch Throwable th th)))))]
-            (>! write-ch {:message @result, :flush? true}))
-          (catch Throwable ex
-            (log/error ex "An Error ocurred.")
-            (let [[type throwable] (extract-exception (get-context ex))
-                  ex-msg (call-exception type (format-stack-trace throwable))]
-              (>! write-ch {:message ex-msg, :flush? true}))))
-        (recur)))))
+        (when
+          (try
+            (let [result (<! (thread
+                                (boxed
+                                  (try
+                                    (if middleware
+                                      (let [wrapper-fn (middleware (partial handle-request service))]
+                                        (wrapper-fn msg))
+                                      (handle-request service msg))
+                                    (catch Throwable th th)))))
+                  resp   {:message @result, :flush? true}]
+              (if timeout-ms
+                (alt!
+                  [[write-ch resp]]
+                  ([v ch] v)
+
+                  [(timeout timeout-ms)]
+                  ([v ch]
+                    (log/error "Service Timeout: Couldn't write response.")
+                    false))
+                (>! write-ch resp)))
+            (catch Throwable ex
+              (log/error ex "An Error ocurred.")
+              (let [[type throwable] (extract-exception (get-context ex))
+                    ex-msg (call-exception type (format-stack-trace throwable))]
+                (alts! [[write-ch {:message ex-msg, :flush? true}] (timeout timeout-ms)])
+                false)))
+          (recur))))))
 
 
 (defn- channel-initializer

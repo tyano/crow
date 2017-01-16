@@ -14,7 +14,7 @@
             [clojure.set :refer [superset?]]
             [crow.utils :refer [extract-exception]]
             [slingshot.support :refer [get-context]]
-            [clojure.core.async :refer [chan go-loop thread <! >! <!! >!!]])
+            [clojure.core.async :refer [chan go-loop thread <! >! <!! >!! timeout alt! alts!]])
   (:import [java.util UUID]
            [io.netty.handler.codec.bytes
               ByteArrayDecoder
@@ -53,7 +53,7 @@
 
 
 (defn accept-heartbeat
-  [registrar service-id renewal-ms]
+  [registrar service-id]
   (log/trace "accept-heartbeat:" service-id)
   (let [expire-at (-> (now) (plus (millis (:renewal-ms registrar))))
         services  (swap! (:services registrar)
@@ -130,34 +130,44 @@
 
 
 (defn- handle-request
-  [registrar renewal-ms msg]
+  [registrar msg]
   (boxed
     (try
       (cond
         (ping? msg)         (do (log/trace "received a ping.") (ack))
         (join-request? msg) (let [{:keys [address port service-id service-name attributes]} msg]
                               (accept-service-registration registrar address port service-id service-name attributes))
-        (heart-beat? msg)   (accept-heartbeat registrar (:service-id msg) renewal-ms)
+        (heart-beat? msg)   (accept-heartbeat registrar (:service-id msg))
         (discovery? msg)    (accept-discovery registrar (:service-name msg) (:attributes msg))
         :else               (invalid-message msg))
       (catch Throwable th th))))
 
 (defn- make-registrar-handler
-  [registrar renewal-ms]
-  {:pre [registrar renewal-ms]}
+  [registrar timeout-ms]
+  {:pre [registrar]}
   (fn [read-ch write-ch]
     (go-loop []
       (when-let [msg (<! read-ch)]
-        (try
-          (let [result (<! (thread (handle-request registrar renewal-ms @msg)))]
-            (>! write-ch {:message @result :flush? true}))
-          (catch Throwable ex
-            (log/error ex "An Error ocurred.")
-            (let [[type throwable] (extract-exception (get-context ex))
-                  ex-msg (call-exception type (format-stack-trace throwable))]
-              (>! write-ch {:message ex-msg :flush? true})
-              nil)))
-        (recur)))))
+        (when (try
+                (let [result (<! (thread (handle-request registrar @msg)))
+                      resp   {:message @result :flush? true}]
+                  (if timeout-ms
+                    (alt!
+                      [[write-ch resp]]
+                      ([v ch] v)
+
+                      [(timeout timeout-ms)]
+                      ([v ch]
+                        (log/error "Registrar Timeout: Couldn't write response.")
+                        false))
+                    (>! write-ch resp)))
+                (catch Throwable ex
+                  (log/error ex "An Error ocurred.")
+                  (let [[type throwable] (extract-exception (get-context ex))
+                        ex-msg (call-exception type (format-stack-trace throwable))]
+                    (alts! [[write-ch {:message ex-msg :flush? true}] (timeout timeout-ms)])
+                    false)))
+          (recur))))))
 
 (defn- channel-initializer
   [netty-ch config]
@@ -184,7 +194,7 @@
                     :server.config/channel-initializer channel-initializer
                     :server.config/read-channel-builder #(chan 50 unpacker)
                     :server.config/write-channel-builder #(chan 50 packer)
-                    :server.config/server-handler (make-registrar-handler registrar renewal-ms)})]
+                    :server.config/server-handler (make-registrar-handler registrar send-recv-timeout)})]
       (log/info (str "#### REGISTRAR SERVICE (name: " (pr-str name) " port: " port ") starts."))
       server)))
 

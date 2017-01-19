@@ -11,10 +11,15 @@
             [schema.core :as s]
             [crow.logging :refer [trace-pr]]
             [slingshot.slingshot :refer [try+ throw+]]
-            [async-connect.box :as box])
+            [async-connect.box :as box]
+            [clojure.core.async :refer [<! >! <!! >!! go go-loop alt! alts! thread chan] :as async]
+            [async-connect.client :refer [connect close] :as async-connect])
   (:import [com.shelf.messagepack MessagePackFrameDecoder]
            [msgpack.core Ext]
-           [java.net ConnectException]))
+           [java.net ConnectException]
+           [io.netty.handler.codec.bytes
+              ByteArrayDecoder
+              ByteArrayEncoder]))
 
 
 (defn frame-decorder
@@ -57,7 +62,7 @@
   returns a differed object holding true or false."
   [stream obj timeout-ms]
   (if timeout-ms
-    (try-put! stream obj timeout-ms timeout)
+    (try-put! stream obj timeout-ms ::timeout)
     (put! stream obj)))
 
 (defn read-message
@@ -88,26 +93,37 @@
       in)
     (ms/splice out in)))
 
+(defn- initialize-channel
+  [netty-ch config]
+  (.. netty-ch
+    (pipeline)
+    (addLast "messagepack-framedecoder" (frame-decorder))
+    (addLast "bytes-decoder" (ByteArrayDecoder.))
+    (addLast "bytes-encoder" (ByteArrayEncoder.))))
+
+(def bootstrap
+  (async-connect/make-bootstrap
+    {:client.config/channel-initializer initialize-channel}))
+
 (defn client
   [address port]
-  (chain (tcp/client {:host address,
-                      :port port,
-                      :pipeline-transform #(.addFirst % "framer" (frame-decorder))})
-    wrap-duplex-stream))
+  (let [read-ch  (chan 500 unpacker)
+        write-ch (chan 500 packer)]
+    (async-connect/connect bootstrap address port read-ch write-ch)))
 
 (defn- try-send
   [address port req timeout-ms send-retry-count send-retry-interval-ms]
   (letfn [(retry-send
-            [stream retry-count result]
-            (when stream
-              (close! stream)
-              (log/trace "stream closed."))
+            [conn retry-count result]
+            (when conn
+              (close conn)
+              (log/trace "channel closed."))
             (Thread/sleep (* send-retry-interval-ms retry-count))
             (when (<= retry-count send-retry-count)
               (log/info (format "retry! -- times: %d/%d" retry-count send-retry-count)))
-            (d/recur retry-count result))]
+            {:type :recur :retry-count retry-count :result result})]
 
-    (d/loop [retry 0 result nil]
+    (go-loop [retry 0 result nil]
       (if (> retry send-retry-count)
         (cond
           (instance? ConnectionError result)
@@ -119,26 +135,35 @@
           :else
           result)
 
-        (-> (let-flow [stream (client address port)]
-              (-> (let-flow [sent (send! stream req timeout-ms)]
-                    (case sent
+        (let [{:keys [read-ch write-ch] :as conn} (client address port)
+              {:keys [type] :as c}
+                  (try
+                    (case (alt!
+                            [[write-ch {:message req :flush? true}]]
+                            ([v ch] v)
+
+                            [(async/timeout timeout-ms)]
+                            ([v ch] timeout))
                       false
                       (do
                         (log/error (str "Couldn't send a message: " (pr-str req)))
-                        (retry-send stream (inc retry) connect-failed))
+                        (retry-send conn (inc retry) connect-failed))
 
                       timeout
                       (do
                         (log/error (str "Timeout: Couldn't send a message: " (pr-str req)))
-                        (retry-send stream (inc retry) connect-timeout))
+                        (retry-send conn (inc retry) connect-timeout))
 
-                      stream))
-                  (d/catch ConnectException
-                    (fn [ex]
-                      (retry-send stream (inc retry) ex)))))
-            (d/catch ConnectException
-              (fn [ex]
-                (retry-send nil (inc retry) ex))))))))
+                      {:type :success :resut conn})
+                    (catch ConnectException ex
+                      (retry-send nil (inc retry) ex)))]
+          (case type
+            :recur
+            (recur (:retry-count c) (:result c))
+
+            :success
+            (:result c)))))))
+
 
 (defn send
   ([address port req timeout-ms send-retry-count send-retry-interval-ms]

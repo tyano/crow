@@ -13,7 +13,7 @@
             [slingshot.slingshot :refer [try+ throw+]]
             [async-connect.box :as box]
             [clojure.core.async :refer [<! >! <!! >!! go go-loop alt! alts! thread chan] :as async]
-            [async-connect.client :refer [connect close] :as async-connect]
+            [async-connect.client :refer [connect] :as async-connect]
             [async-connect.box :refer [boxed]])
   (:import [com.shelf.messagepack MessagePackFrameDecoder]
            [msgpack.core Ext]
@@ -93,7 +93,7 @@
   (letfn [(retry-send
             [conn retry-count result]
             (when conn
-              (close conn)
+              (async-connect/close conn)
               (log/trace "channel closed."))
             (Thread/sleep (* send-retry-interval-ms retry-count))
             (when (<= retry-count send-retry-count)
@@ -145,7 +145,7 @@
 (defn send
   ([ch address port req timeout-ms send-retry-count send-retry-interval-ms]
     (log/trace "send-recv-timeout:" timeout-ms)
-    (let [{:keys [read-ch]} (try-send address port req timeout-ms send-retry-count send-retry-interval-ms)
+    (let [{:keys [read-ch] :as conn} (try-send address port req timeout-ms send-retry-count send-retry-interval-ms)
           result-ch (or ch (chan))]
       (go
         (try
@@ -169,7 +169,10 @@
               (>! result-ch (boxed msg))))
           (catch Throwable th
             (log/error th "send error!")
-            (>! result-ch (boxed th)))))
+            (>! result-ch (boxed th)))
+          (finally
+            (async/close! result-ch)
+            (async-connect/close conn))))
       result-ch))
 
   ([address port req timeout-ms send-retry-count send-retry-interval-ms]

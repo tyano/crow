@@ -1,8 +1,8 @@
 (ns crow.registrar-source
   (:require [byte-streams :as bs]
             [clojure.string :refer [split]]
-            [aleph.http :as http]
-            [manifold.deferred :refer [chain] :as d]))
+            [clj-http.client :as http])
+  (:import [java.io BufferedReader StringReader]))
 
 
 (defprotocol RegistrarSource
@@ -16,13 +16,12 @@
 (defrecord UrlRegistrarSource [source-url]
   RegistrarSource
   (registrars [source]
-    (-> @(http/get source-url)
-      (:body)
-      (bs/to-line-seq)
-      ((fn [lines]
-        (for [line lines]
-          (let [[address port-str] (split line #":")]
-            {:address address, :port (Long/valueOf ^String port-str)})))))))
+    (when-let [body (:body (http/get source-url))]
+      (with-open [rdr (StringReader. body)]
+        (doall
+          (for [line (line-seq rdr)]
+            (let [[address port-str] (split line #":")]
+              {:address address, :port (Long/valueOf ^String port-str)})))))))
 
 (defn url-registrar-source [source-url] (UrlRegistrarSource. source-url))
 

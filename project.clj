@@ -15,7 +15,8 @@
                  [slingshot "0.12.2"]
                  [com.shelf/messagepack-framedecoder "1.0-SNAPSHOT"]
                  [prismatic/schema "1.1.3"]
-                 [ns-tracker "0.3.0"]]
+                 [ns-tracker "0.3.0"]
+                 [clj-http "3.4.1"]]
   :plugins [[lein-midje "3.2"]]
   :repositories {"javelindev-snapshots" "http://javelindev.jp/repository/snapshots"}
   :profiles {:dev {:dependencies [[midje "1.8.3"]

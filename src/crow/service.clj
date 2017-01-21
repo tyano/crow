@@ -86,16 +86,14 @@
                                       (handle-request service msg))
                                     (catch Throwable th th)))))
                   resp   {:message @result, :flush? true}]
-              (if timeout-ms
                 (alt!
                   [[write-ch resp]]
                   ([v ch] v)
 
-                  [(timeout timeout-ms)]
+                  [(if timeout-ms (timeout timeout-ms) (chan))]
                   ([v ch]
                     (log/error "Service Timeout: Couldn't write response.")
-                    false))
-                (>! write-ch resp)))
+                    false)))
             (catch Throwable ex
               (log/error ex "An Error ocurred.")
               (let [[type throwable] (extract-exception (get-context ex))

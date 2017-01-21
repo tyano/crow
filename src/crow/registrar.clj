@@ -7,10 +7,11 @@
                                    protocol-error ack call-exception
                                    service-found service-not-found] :as p]
             [crow.request :refer [frame-decorder wrap-duplex-stream format-stack-trace packer unpacker] :as request]
-            [clojure.core.async :refer [go-loop chan <! onto-chan timeout]]
             [crow.service :as sv]
-            [clojure.tools.logging :as log]
+            [crow.request :refer [write-with-timeout read-with-timeout]]
             [crow.logging :refer [trace-pr debug-pr info-pr]]
+            [clojure.core.async :refer [go-loop chan <! onto-chan timeout]]
+            [clojure.tools.logging :as log]
             [clojure.set :refer [superset?]]
             [crow.utils :refer [extract-exception]]
             [slingshot.support :refer [get-context]]
@@ -156,7 +157,7 @@
                       [[write-ch resp]]
                       ([v ch] v)
 
-                      [(timeout timeout-ms)]
+                      [(if timeout-ms (timeout timeout-ms) (chan))]
                       ([v ch]
                         (log/error "Registrar Timeout: Couldn't write response.")
                         false))

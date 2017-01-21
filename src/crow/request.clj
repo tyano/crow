@@ -88,6 +88,36 @@
         write-ch (chan 500 packer)]
     (async-connect/connect bootstrap address port read-ch write-ch)))
 
+(defmacro write-with-timeout
+  [write-ch data timeout-ms]
+  `(let [ch# ~write-ch
+         data# ~data
+         timeout-ms# ~timeout-ms]
+    (if timeout-ms#
+      (alt!
+        [[ch# data#]]
+        ([v# ~'_] v#)
+
+        [(async/timeout timeout-ms#)]
+        ([~'_ ~'_] ::timeout))
+
+      (>! ch# data#))))
+
+(defmacro read-with-timeout
+  [read-ch timeout-ms]
+  `(let [ch# ~read-ch
+         timeout-ms# ~timeout-ms]
+    (deref
+      (if timeout-ms#
+        (alt!
+          [ch#]
+          ([v# ~'_] v#)
+
+          [(async/timeout timeout-ms#)]
+          ([~'_ ~'_] ::timeout))
+
+        (<! ch#)))))
+
 (defn- try-send
   [address port req timeout-ms send-retry-count send-retry-interval-ms]
   (letfn [(retry-send
@@ -100,79 +130,77 @@
               (log/info (format "retry! -- times: %d/%d" retry-count send-retry-count)))
             {:type :recur :retry-count retry-count :result result})]
 
-    (go-loop [retry 0 result nil]
-      (if (> retry send-retry-count)
-        (cond
-          (connection-error? result)
-          (throw+ {:type ::connection-error, :kind (:type result)})
+    (let [result-ch (chan)]
+      (go-loop [retry 0 result nil]
+        (if (> retry send-retry-count)
+          (cond
+            (connection-error? result)
+            (throw+ {:type ::connection-error, :kind (:type result)})
 
-          (instance? Throwable result)
-          (throw result)
+            (instance? Throwable result)
+            (throw result)
 
-          :else
-          result)
+            :else
+            result)
 
-        (let [{:keys [read-ch write-ch] :as conn} (client address port)
-              {:keys [type] :as c}
-                  (try
-                    (case (alt!
-                            [[write-ch {:message req :flush? true}]]
-                            ([v ch] v)
+          (let [{:keys [:client/write-ch] :as conn} (client address port)
+                {:keys [type] :as c}
+                    (try
+                      (case (write-with-timeout write-ch {:message req :flush? true} timeout-ms)
+                        false
+                        (do
+                          (log/error (str "Couldn't send a message: " (pr-str req)))
+                          (retry-send conn (inc retry) ::connect-failed))
 
-                            [(async/timeout timeout-ms)]
-                            ([v ch] ::timeout))
-                      false
-                      (do
-                        (log/error (str "Couldn't send a message: " (pr-str req)))
-                        (retry-send conn (inc retry) ::connect-failed))
+                        ::timeout
+                        (do
+                          (log/error (str "Timeout: Couldn't send a message: " (pr-str req)))
+                          (retry-send conn (inc retry) ::connect-timeout))
 
-                      ::timeout
-                      (do
-                        (log/error (str "Timeout: Couldn't send a message: " (pr-str req)))
-                        (retry-send conn (inc retry) ::connect-timeout))
+                        {:type :success :result conn})
 
-                      {:type :success :result conn})
-                    (catch ConnectException ex
-                      (retry-send nil (inc retry) ex)))]
-          (case type
-            :recur
-            (recur (:retry-count c) (:result c))
+                      (catch ConnectException ex
+                        (retry-send nil (inc retry) ex)))]
+            (case type
+              :recur
+              (recur (:retry-count c) (:result c))
 
-            :success
-            (:result c)))))))
+              :success
+              (>! result-ch (:result c))))))
+      result-ch)))
 
 
 (defn send
   ([ch address port req timeout-ms send-retry-count send-retry-interval-ms]
     (log/trace "send-recv-timeout:" timeout-ms)
-    (let [{:keys [read-ch] :as conn} (try-send address port req timeout-ms send-retry-count send-retry-interval-ms)
-          result-ch (or ch (chan))]
+    (let [result-ch (or ch (chan))]
+
       (go
-        (try
-          (let [msg (alt!
-                      [read-ch]
-                      ([v ch] @v)
+        (let [{:keys [:client/read-ch] :as conn} (<! (try-send address port req timeout-ms send-retry-count send-retry-interval-ms))]
+          (go
+            (let [result (try
+                            (let [msg (read-with-timeout read-ch timeout-ms)]
+                              (case msg
+                                ::timeout
+                                (do
+                                  (log/error (str "Timeout: Couldn't receive a response for a req: " (pr-str req)))
+                                  ::timeout)
 
-                      [(async/timeout timeout-ms)]
-                      ([v ch] ::timeout))]
-            (case msg
-              ::timeout
-              (do
-                (log/error (str "Timeout: Couldn't receive a response for a req: " (pr-str req)))
-                (>! result-ch (boxed ::timeout)))
+                                nil
+                                (do
+                                  (log/error (str "Drained: Peer closed: req: " (pr-str req)))
+                                  nil)
 
-              nil
-              (do
-                (log/error (str "Drained: Peer closed: req: " (pr-str req)))
-                (>! result-ch nil))
+                                msg))
 
-              (>! result-ch (boxed msg))))
-          (catch Throwable th
-            (log/error th "send error!")
-            (>! result-ch (boxed th)))
-          (finally
-            (async/close! result-ch)
-            (async-connect/close conn))))
+                            (catch Throwable th
+                              (log/error th "send error!")
+                              th)
+
+                            (finally
+                              (async-connect/close conn)))]
+              (>! result-ch (boxed result))))))
+
       result-ch))
 
   ([address port req timeout-ms send-retry-count send-retry-interval-ms]

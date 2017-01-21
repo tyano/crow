@@ -44,7 +44,7 @@
   (let [msg (remote-call target-ns fn-name args)]
     (go
       (try
-        (let [msg  @(<! (send address port msg timeout-ms send-retry-count send-retry-interval-ms))
+        (let [msg  (some-> (<! (send address port msg timeout-ms send-retry-count send-retry-interval-ms)) (deref))
               resp (cond
                       (protocol-error? msg)
                       (throw+ {:type :protocol-error, :error-code (:error-code msg), :message (:message msg)})
@@ -64,9 +64,7 @@
                       (throw (IllegalStateException. (str "No such message format: " (pr-str msg)))))]
           (>!! ch (box resp)))
         (catch Throwable th
-          (>!! ch (box service-desc service th)))
-        (finally
-          (close! ch))))
+          (>!! ch (box service-desc service th)))))
     ch))
 
 (def ^:dynamic *default-finder*)

@@ -1,12 +1,12 @@
 (ns crow.service-finder
-  (:require [clojure.core.async :refer [go-loop timeout <!]]
+  (:require [clojure.core.async :refer [go-loop timeout <! go]]
             [clojure.set :refer [difference]]
             [crow.protocol :refer [ping ack?]]
             [crow.request :as request]
             [crow.registrar-source :as source]
             [clojure.tools.logging :as log]
             [crow.logging :refer [trace-pr info-pr]]
-            [manifold.deferred :refer [chain] :as d]))
+            [async-connect.box :refer [boxed]]))
 
 (def ^:dynamic *dead-registrar-check-interval-ms* 30000)
 
@@ -23,7 +23,7 @@
       (doseq [{:keys [address port] :as registrar} current-dead-registrars]
         (try
           (trace-pr "checking: " registrar)
-          (let [msg @(request/send address port (ping) nil)]
+          (let [msg @(<! (request/send address port (ping) nil))]
             (if (ack? msg)
               (do
                 (info-pr "registrar revived: " registrar)
@@ -137,29 +137,29 @@
 
 (defn- send-ping
   [finder {:keys [address port] :as service} timeout-ms send-retry-count send-retry-interval-ms]
-  (try
-    (let [req (ping)]
-      @(-> (request/send address port req timeout-ms send-retry-count send-retry-interval-ms)
-           (chain
-             (fn [resp]
-               (cond
-                 (ack? resp)
-                 true
+  (go
+    (try
+      (let [req (ping)]
+        (let [resp @(<! (request/send address port req timeout-ms send-retry-count send-retry-interval-ms))]
+          (cond
+            (ack? resp)
+            (boxed true)
 
-                 :else
-                 (throw (IllegalStateException. "Unknown response")))))))
-    (catch Throwable th
-      ;; a service doesn't respond.
-      ;; remove the service from a cache
-      (log/info th (str "service " service " is dead."))
-      (swap! (:service-map finder)
-        (fn [service-map]
-          (into {}
-            (map
-              (fn [[service-desc service-coll]]
-                [service-desc (set (filter #(not= service %) service-coll))])
-              service-map))))
-      false)))
+            :else
+             (throw (IllegalStateException. "Unknown response")))))
+
+      (catch Throwable th
+        ;; a service doesn't respond.
+        ;; remove the service from a cache
+        (log/info th (str "service " service " is dead."))
+        (swap! (:service-map finder)
+          (fn [service-map]
+            (into {}
+              (map
+                (fn [[service-desc service-coll]]
+                  [service-desc (set (filter #(not= service %) service-coll))])
+                service-map))))
+        (boxed false)))))
 
 (defn- check-cached-services
   [finder timeout-ms send-retry-count send-retry-interval-ms]

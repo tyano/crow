@@ -3,8 +3,7 @@
   (:require [crow.protocol :refer [remote-call call-result? call-exception? protocol-error?]]
             [crow.request :refer [send] :as request]
             [crow.boxed :refer [box unbox service-info]]
-            [manifold.deferred :refer [chain] :as d]
-            [clojure.core.async :refer [>!! chan <!! <! close!]]
+            [clojure.core.async :refer [>!! chan <!! <! close! go]]
             [crow.discovery :refer [discover]]
             [crow.service-finder :refer [standard-service-finder] :as finder]
             [crow.logging :refer [debug-pr]]
@@ -43,34 +42,31 @@
    {:keys [target-ns fn-name args]} :- CallDescriptor
    {:keys [timeout-ms send-retry-count send-retry-interval-ms], :or {send-retry-count 3, send-retry-interval-ms 500}} :- DiscoveryOptions]
   (let [msg (remote-call target-ns fn-name args)]
-    (-> (send address port msg timeout-ms send-retry-count send-retry-interval-ms)
-        (chain
-          (fn [msg]
-            (cond
-              (protocol-error? msg)
-              (throw+ {:type :protocol-error, :error-code (:error-code msg), :message (:message msg)})
+    (go
+      (try
+        (let [msg  @(<! (send address port msg timeout-ms send-retry-count send-retry-interval-ms))
+              resp (cond
+                      (protocol-error? msg)
+                      (throw+ {:type :protocol-error, :error-code (:error-code msg), :message (:message msg)})
 
-              (call-exception? msg)
-              (let [type-str    (:type msg)
-                    stack-trace (:stack-trace msg)]
-                (throw+ {:type (keyword type-str)} stack-trace))
+                      (call-exception? msg)
+                      (let [type-str    (:type msg)
+                            stack-trace (:stack-trace msg)]
+                        (throw+ {:type (keyword type-str)} stack-trace))
 
-              (call-result? msg)
-              (:obj msg)
+                      (call-result? msg)
+                      (:obj msg)
 
-              (identical? :crow.request/timeout msg)
-              msg
+                      (identical? :crow.request/timeout msg)
+                      msg
 
-              :else
-              (throw (IllegalStateException. (str "No such message format: " (pr-str msg))))))
-          (fn [msg']
-            (>!! ch (box service-desc service msg'))))
-
-        (d/catch
-          (fn [th]
-            (>!! ch (box service-desc service th))))
-        (d/finally
-          (fn [] (close! ch))))
+                      :else
+                      (throw (IllegalStateException. (str "No such message format: " (pr-str msg)))))]
+          (>!! ch (box resp)))
+        (catch Throwable th
+          (>!! ch (box service-desc service th)))
+        (finally
+          (close! ch))))
     ch))
 
 (def ^:dynamic *default-finder*)

@@ -10,7 +10,9 @@
             [manifold.deferred :refer [chain] :as d]
             [clojure.tools.logging :as log]
             [slingshot.slingshot :refer [throw+]]
-            [crow.logging :refer [trace-pr info-pr]]))
+            [crow.logging :refer [trace-pr info-pr]]
+            [async-connect.box :refer [boxed]]
+            [clojure.core.async :refer [<! <!! go]]))
 
 
 (defn- discover-with
@@ -20,38 +22,34 @@
    {:keys [timeout-ms send-retry-count send-retry-interval-ms] :or {timeout-ms Long/MAX_VALUE send-retry-count 3 send-retry-interval-ms (long 500)} :as options}]
   (trace-pr "options:" options)
   (let [req     (discovery service-name attributes)
-        result  @(-> (request/send address port req timeout-ms send-retry-count send-retry-interval-ms)
-                    (chain
-                      (fn [msg]
-                        (cond
-                          (service-found? msg)
-                          (do
-                             (trace-pr "service-found: " msg)
-                             (vec (:services msg)))
+        result  @(<!! (go
+                        (try
+                          (let [msg @(<! (request/send address port req timeout-ms send-retry-count send-retry-interval-ms))]
+                            (cond
+                              (service-found? msg)
+                              (do
+                                (trace-pr "service-found: " msg)
+                                (boxed (vec (:services msg))))
 
-                          (service-not-found? msg)
-                          nil
+                              (service-not-found? msg)
+                              (boxed nil)
 
-                          (call-exception? msg)
-                          (let [type-str    (:type msg)
-                                stack-trace (:stack-trace msg)]
-                            (throw+ {:type (keyword type-str), :stack-trace stack-trace}))
+                              (call-exception? msg)
+                              (let [type-str    (:type msg)
+                                    stack-trace (:stack-trace msg)]
+                                (throw+ {:type (keyword type-str), :stack-trace stack-trace}))
 
-                          (identical? :crow.request/timeout msg)
-                          nil
+                              (identical? :crow.request/timeout msg)
+                              (boxed nil)
 
-                          :else
-                          (throw+ {:type ::illegal-reponse, :response msg}))))
-                      (d/catch Throwable
-                         (fn [th]
+                              :else
+                              (throw+ {:type ::illegal-reponse, :response msg})))
+                          (catch Throwable th
                             (log/error th "An error occured when sending a discovery request.")
                             (abandon-registrar! finder registrar)
-                            (throw th))))]
-    (if (instance? Throwable result)
-      (throw result)
-      (do
-        (finder/reset-services finder service-desc result)
-        result))))
+                            (boxed th)))))]
+    (finder/reset-services finder service-desc result)
+    result))
 
 (defn discover
   [finder {:keys [service-name attributes] :as service-desc} options]

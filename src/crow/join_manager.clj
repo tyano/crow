@@ -1,17 +1,17 @@
 (ns crow.join-manager
   (:require [aleph.tcp :as tcp]
-            [manifold.deferred :refer [let-flow chain] :as d]
             [crow.protocol :refer [join-request heart-beat ping
                                    ack? lease? lease-expired? registration?] :as protocol]
             [crow.registrar-source :as source]
             [crow.request :as request]
             [crow.id-store :refer [write]]
-            [clojure.core.async :refer [chan go-loop <! timeout >!! onto-chan] :as async]
+            [clojure.core.async :refer [chan go-loop <! timeout >!! onto-chan go] :as async]
             [clojure.set :refer [difference select] :as st]
             [slingshot.slingshot :refer [throw+]]
             [clojure.tools.logging :as log]
             [clj-time.core :refer [now plus after? millis] :as t]
-            [crow.logging :refer [trace-pr debug-pr]]))
+            [crow.logging :refer [trace-pr debug-pr]]
+            [async-connect.box :refer [boxed]]))
 
 (def should-stop (atom false))
 
@@ -105,68 +105,66 @@
   [join-mgr service {:keys [address port] :as registrar} timeout-ms send-retry-count send-retry-interval-ms]
   (log/debug "Joinning" (pr-str service) "to" (pr-str registrar))
   (let [req (join-request (:address service) (:port service) (service-id service) (:name service) (:attributes service))]
-    (-> (request/send address port req timeout-ms send-retry-count send-retry-interval-ms)
-        (chain
-          (fn [msg]
-            (cond
-              (registration? msg)
-              (join! join-mgr service registrar msg)
+    (go
+      (try
+        (let [msg @(<! (request/send address port req timeout-ms send-retry-count send-retry-interval-ms))]
+          (cond
+            (registration? msg)
+            (boxed (join! join-mgr service registrar msg))
 
-              (identical? :crow.request/timeout msg)
-              (do
-                (trace-pr msg)
-                (throw+ {:type msg
-                         :info (error-info registrar service)}))
+            (identical? :crow.request/timeout msg)
+            (do
+              (trace-pr msg)
+              (throw+ {:type msg
+                       :info (error-info registrar service)}))
 
-              :else
-              (do
-                (debug-pr "illegal message:" msg)
-                (throw+ {:type ::illegal-response
-                         :message msg
-                         :info (error-info registrar service)})))))
-        (d/catch
-          (fn [e]
-            (dosync
-              (registrar-died! join-mgr service registrar))
-            (throw e))))))
+            :else
+            (do
+              (debug-pr "illegal message:" msg)
+              (throw+ {:type ::illegal-response
+                       :message msg
+                       :info (error-info registrar service)}))))
+        (catch Throwable e
+          (dosync
+            (registrar-died! join-mgr service registrar))
+          (boxed e))))))
 
 (declare join)
 
 (defn- send-heart-beat!
   [join-mgr service {:keys [address port] :as registrar} timeout-ms send-retry-count send-retry-interval-ms]
   (let [req (heart-beat (service-id service))]
-    (-> (request/send address port req timeout-ms send-retry-count send-retry-interval-ms)
-        (chain
-          (fn [msg]
-            (cond
-              (lease? msg)
-              (do
-                (log/trace "Lease Renewal: " (service-id service))
-                (accept-lease! join-mgr service registrar (:expire-at msg))
-                true)
+    (go
+      (try
+        (let [msg @(<! (request/send address port req timeout-ms send-retry-count send-retry-interval-ms))]
+          (cond
+            (lease? msg)
+            (do
+              (log/trace "Lease Renewal: " (service-id service))
+              (accept-lease! join-mgr service registrar (:expire-at msg))
+              (boxed true))
 
-              (lease-expired? msg)
-              (do
-                (log/info "expired: " (service-id service))
-                (service-expired! join-mgr service registrar)
-                false)
+            (lease-expired? msg)
+            (do
+              (log/info "expired: " (service-id service))
+              (service-expired! join-mgr service registrar)
+              (boxed false))
 
-              (identical? :crow.request/timeout)
-              (do
-                (trace-pr msg)
-                (throw+ {:type msg
-                         :info (error-info registrar service)}))
+            (identical? :crow.request/timeout)
+            (do
+              (trace-pr msg)
+              (throw+ {:type msg
+                       :info (error-info registrar service)}))
 
-              :else
-              (do
-                (trace-pr "illegal message:" msg)
-                (throw+ {:type ::illegal-response
-                         :message msg
-                         :info (error-info registrar service)})))))
-        (d/catch
-          (fn [e]
-            (registrar-died! join-mgr service registrar)
-            (throw e))))))
+            :else
+            (do
+              (trace-pr "illegal message:" msg)
+              (throw+ {:type ::illegal-response
+                       :message msg
+                       :info (error-info registrar service)}))))
+        (catch Throwable e
+          (registrar-died! join-mgr service registrar)
+          (boxed e))))))
 
 
 (defn- joined?
@@ -185,9 +183,10 @@
         (try
           (let [{:keys [service registrar], :as join-info} (<! join-ch)]
             (when (seq join-info)
-              (-> (join-service! join-mgr service registrar timeout-ms send-retry-count send-retry-interval-ms)
-                  (d/catch
-                    #(log/error % "An exception occured when joining.")))))
+              (try
+                @(<! (join-service! join-mgr service registrar timeout-ms send-retry-count send-retry-interval-ms))
+                (catch Throwable th
+                  (log/error th "An exception occured when joining.")))))
           (catch Throwable e
             (log/error e "join-processor error.")))
         (recur)))))
@@ -245,9 +244,11 @@
                             :when (after? (plus (now) (millis heart-beat-buffer-ms)) expire-at)]
                         [service reg]))]
             (log/trace "send heart-beat from" (pr-str service) "to" (pr-str reg))
-            (-> (send-heart-beat! join-mgr service reg timeout-ms send-retry-count send-retry-interval-ms)
-                (d/catch
-                  #(log/error % "Could not send heart-beat to " (pr-str reg)))))
+            (go
+              (try
+                @(<! (send-heart-beat! join-mgr service reg timeout-ms send-retry-count send-retry-interval-ms))
+                (catch Throwable th
+                  (log/error th "Could not send heart-beat to " (pr-str reg))))))
           (<! (timeout 500))
 
           (catch Throwable th
@@ -271,29 +272,30 @@
   [join-mgr dead-registrar-check-interval timeout-ms send-retry-count send-retry-interval-ms]
   (go-loop []
     (if @should-stop
-      (log/info "dead-registrar-checker stopped.")
+      (do
+        (log/info "dead-registrar-checker stopped.")
+        (boxed nil))
       (do
         (doseq [{:keys [address port] :as registrar} @(:dead-registrars join-mgr)]
           (try
             (let [req (ping)]
-              @(-> (request/send address port req timeout-ms send-retry-count send-retry-interval-ms)
-                   (chain
-                     (fn [resp]
-                       (cond
-                         (ack? resp)
-                         (do
-                           (log/info "A registrar revived: " (pr-str registrar))
-                           (registrar-revived! join-mgr registrar))
+              (let [resp @(<! (request/send address port req timeout-ms send-retry-count send-retry-interval-ms))]
+               (cond
+                 (ack? resp)
+                 (do
+                   (log/info "A registrar revived: " (pr-str registrar))
+                   (boxed (registrar-revived! join-mgr registrar)))
 
-                         :else
-                         nil)))))
+                 :else
+                 (boxed nil))))
             (catch Throwable th
               ;; dead-registrar-checker usually get an error when checking registrars,
               ;; because the purpose of this thread is accessing to 'dead' registrars for checking
               ;; it is alive or not. If a registrar is 'dead' yet, the access will cause an error.
               ;; So if we print the error with ERROR level, verbose error logs will be printed.
               ;; It should be printed only in debugging time.
-              (log/debug th "dead-registrar-checker error."))))
+              (log/debug th "dead-registrar-checker error.")
+              (boxed nil))))
         (<! (timeout dead-registrar-check-interval))
         (recur)))))
 

@@ -112,8 +112,7 @@
               (registration? msg)
               (join! join-mgr service registrar msg)
 
-              (or (identical? request/timeout msg)
-                  (identical? request/drained msg))
+              (identical? :crow.request/timeout msg)
               (do
                 (trace-pr msg)
                 (throw+ {:type msg
@@ -152,8 +151,7 @@
                 (service-expired! join-mgr service registrar)
                 false)
 
-              (or (identical? request/timeout msg)
-                  (identical? request/drained msg))
+              (identical? :crow.request/timeout)
               (do
                 (trace-pr msg)
                 (throw+ {:type msg

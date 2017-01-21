@@ -58,12 +58,7 @@
               (call-result? msg)
               (:obj msg)
 
-              (identical? request/drained msg)
-              (do
-                (log/debug "DRAINED!")
-                nil)
-
-              (identical? request/timeout msg)
+              (identical? :crow.request/timeout msg)
               msg
 
               :else
@@ -197,7 +192,7 @@
   (fn []
     (try+
       (<!!+ (async-fn ch service-desc call-desc options))
-      (catch [:type :crow.request/connection-error] _
+      (catch [:type ::connection-error] _
         (:object &throw-context))
       (catch ConnectException ex
         ex))))
@@ -205,13 +200,13 @@
 
 (defn- timeout?
   [msg]
-  (when msg (identical? msg request/timeout)))
+  (boolean (when msg (identical? msg :crow.request/timeout))))
 
 (defn- connection-error?
   [msg]
   (when msg
     (and (associative? msg)
-         (= :crow.request/connection-error (:type msg)))))
+         (= ::connection-error (:type msg)))))
 
 (defn- connect-exception?
   [msg]
@@ -235,7 +230,7 @@
       (if (> retry remote-call-retry-count)
         (cond
           (timeout? result)
-          (throw+ {:type :crow.request/connection-error, :kind (:type result)})
+          (throw+ {:type ::connection-error, :kind (:type result)})
 
           (connection-error? result)
           (throw+ result)

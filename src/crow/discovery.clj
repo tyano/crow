@@ -6,7 +6,6 @@
             [crow.service :as service]
             [crow.request :as request]
             [crow.service-finder :refer [reset-registrars! abandon-registrar!] :as finder]
-            [aleph.tcp :as tcp]
             [clojure.tools.logging :as log]
             [slingshot.slingshot :refer [throw+]]
             [crow.logging :refer [trace-pr info-pr]]

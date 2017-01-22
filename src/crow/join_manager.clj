@@ -1,6 +1,5 @@
 (ns crow.join-manager
-  (:require [aleph.tcp :as tcp]
-            [crow.protocol :refer [join-request heart-beat ping
+  (:require [crow.protocol :refer [join-request heart-beat ping
                                    ack? lease? lease-expired? registration?] :as protocol]
             [crow.registrar-source :as source]
             [crow.request :as request]

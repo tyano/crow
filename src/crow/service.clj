@@ -3,7 +3,7 @@
             [async-connect.box :refer [boxed]]
             [clojure.core.async :refer [chan go-loop thread <! >! <!! >!! alt! alts! timeout]]
             [crow.protocol :refer [remote-call? ping? invalid-message protocol-error call-result call-exception ack] :as p]
-            [crow.request :refer [frame-decorder wrap-duplex-stream format-stack-trace packer unpacker] :as request]
+            [crow.request :refer [frame-decorder format-stack-trace packer unpacker] :as request]
             [crow.join-manager :refer [start-join-manager join]]
             [clojure.tools.logging :as log]
             [crow.logging :refer [trace-pr]]

@@ -1,6 +1,5 @@
 (ns crow.middleware.reload
   (:require [ns-tracker.core :refer [ns-tracker]]
-            [manifold.deferred :as d]
             [clojure.tools.logging :as log]))
 
 (defn wrap-reload

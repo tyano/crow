@@ -6,7 +6,7 @@
                                    join-request? heart-beat? discovery? ping?
                                    protocol-error ack call-exception
                                    service-found service-not-found] :as p]
-            [crow.request :refer [frame-decorder wrap-duplex-stream format-stack-trace packer unpacker] :as request]
+            [crow.request :refer [frame-decorder format-stack-trace packer unpacker] :as request]
             [crow.service :as sv]
             [crow.request :refer [write-with-timeout read-with-timeout]]
             [crow.logging :refer [trace-pr debug-pr info-pr]]

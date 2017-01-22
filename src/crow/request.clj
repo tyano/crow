@@ -1,20 +1,15 @@
 (ns crow.request
   (:refer-clojure :exclude [send])
-  (:require [aleph.tcp :as tcp]
-            [msgpack.core :as msgpack]
-            [manifold.stream :refer [try-put! try-take! close! take! put!] :as ms]
-            [manifold.deferred :refer [let-flow chain success-deferred error-deferred] :as d]
+  (:require [msgpack.core :as msgpack]
             [msgpack.core :refer [pack unpack refine-ext] :as msgpack]
             [clojure.tools.logging :as log]
             [crow.logging :refer [trace-pr]]
-            [byte-streams :refer [to-byte-array]]
             [schema.core :as s]
             [crow.logging :refer [trace-pr]]
             [slingshot.slingshot :refer [try+ throw+]]
-            [async-connect.box :as box]
             [clojure.core.async :refer [<! >! <!! >!! go go-loop alt! alts! thread chan] :as async]
             [async-connect.client :refer [connect] :as async-connect]
-            [async-connect.box :refer [boxed]])
+            [async-connect.box :refer [boxed] :as box])
   (:import [com.shelf.messagepack MessagePackFrameDecoder]
            [msgpack.core Ext]
            [java.net ConnectException]
@@ -57,18 +52,6 @@
 
 (def packer (map #(update % :message pack)))
 (def unpacker (map #(box/update % read-message)))
-
-(defn wrap-duplex-stream
-  [stream]
-  (let [out (ms/stream)
-        in  (ms/stream)]
-    (ms/connect
-      (ms/map pack out)
-      stream)
-    (ms/connect
-      (ms/map read-message stream)
-      in)
-    (ms/splice out in)))
 
 (defn- initialize-channel
   [netty-ch config]

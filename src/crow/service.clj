@@ -82,8 +82,8 @@
                                   (try
                                     (if middleware
                                       (let [wrapper-fn (middleware (partial handle-request service))]
-                                        (wrapper-fn msg))
-                                      (handle-request service msg))
+                                        (wrapper-fn @msg))
+                                      (handle-request service @msg))
                                     (catch Throwable th th)))))
                   resp   {:message @result, :flush? true}]
                 (alt!

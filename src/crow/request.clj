@@ -107,16 +107,15 @@
   [read-ch timeout-ms]
   `(let [ch# ~read-ch
          timeout-ms# ~timeout-ms]
-    (deref
       (if timeout-ms#
         (alt!
           [ch#]
-          ([v# ~'_] v#)
+          ([v# ~'_] @v#)
 
           [(async/timeout timeout-ms#)]
           ([~'_ ~'_] ::timeout))
 
-        (<! ch#)))))
+        @(<! ch#))))
 
 (defn- try-send
   [address port req timeout-ms send-retry-count send-retry-interval-ms]
@@ -141,7 +140,7 @@
             (throw result)
 
             :else
-            result)
+            (throw+ {:type ::retry-count-over, :last-result result}))
 
           (let [{:keys [:client/write-ch] :as conn} (client address port)
                 {:keys [type] :as c}

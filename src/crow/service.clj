@@ -11,7 +11,9 @@
             [crow.id-store :refer [->FileIdStore] :as id]
             [slingshot.slingshot :refer [try+]]
             [crow.utils :refer [extract-exception]]
-            [slingshot.support :refer [get-context]])
+            [slingshot.support :refer [get-context]]
+            [async-connect.pool :refer [pooled-connection-factory]]
+            [crow.request :as request])
   (:import [io.netty.handler.codec.bytes
               ByteArrayDecoder
               ByteArrayEncoder]))
@@ -113,7 +115,7 @@
 
 
 (defn start-service
-  [{:keys [address port name attributes id-store public-namespaces registrar-source
+  [{:keys [connection-factory address port name attributes id-store public-namespaces registrar-source
            fetch-registrar-interval-ms heart-beat-buffer-ms dead-registrar-check-interval
            rejoin-interval-ms send-recv-timeout
            send-retry-count send-retry-interval-ms]
@@ -129,7 +131,8 @@
                    :server.config/read-channel-builder #(chan 50 unpacker)
                    :server.config/write-channel-builder #(chan 50 packer)
                    :server.config/server-handler (make-service-handler service send-recv-timeout config)})
-        join-mgr (start-join-manager registrar-source
+        join-mgr (start-join-manager connection-factory
+                                     registrar-source
                                      fetch-registrar-interval-ms
                                      dead-registrar-check-interval
                                      heart-beat-buffer-ms
@@ -155,6 +158,7 @@
                 :fetch-registrar-interval-ms 30000
                 :heart-beat-buffer-ms      4000
                 :dead-registrar-check-interval 10000
-                :rejoin-interval-ms 10000}
+                :rejoin-interval-ms 10000
+                :connection-factory (pooled-connection-factory request/bootstrap)}
         server (start-service config)]
     (close-wait server #(println "SERVER STOPPED."))))

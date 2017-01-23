@@ -1,7 +1,6 @@
 (ns crow.remote
-  (:refer-clojure :exclude [send])
   (:require [crow.protocol :refer [remote-call call-result? call-exception? protocol-error?]]
-            [crow.request :refer [send] :as request]
+            [crow.request :as request]
             [crow.boxed :refer [box unbox service-info]]
             [clojure.core.async :refer [>!! chan <!! <! close! go]]
             [crow.discovery :refer [discover]]
@@ -35,6 +34,22 @@
 (def CallOptions {(s/optional-key :timeout-ms) s/Num
                   s/Keyword s/Any})
 
+(def ^:dynamic *default-finder*)
+
+(defn register-service-finder
+  [finder]
+  {:pre [finder]}
+  (def ^:dynamic *default-finder* finder))
+
+(defn with-finder-fn
+  [finder f]
+  (binding [*default-finder* finder]
+    (f)))
+
+(defmacro with-finder
+  [finder & expr]
+  `(with-finder-fn ~finder (fn [] ~@expr)))
+
 (s/defn invoke
   [ch :- s/Any
    service-desc :- ServiceDescriptor
@@ -44,7 +59,8 @@
   (let [msg (remote-call target-ns fn-name args)]
     (go
       (try
-        (let [msg  (some-> (<! (send address port msg timeout-ms send-retry-count send-retry-interval-ms)) (deref))
+        (let [factory (:connection-factory *default-finder*)
+              msg  (some-> (<! (request/send factory address port msg timeout-ms send-retry-count send-retry-interval-ms)) (deref))
               resp (cond
                       (protocol-error? msg)
                       (throw+ {:type :protocol-error, :error-code (:error-code msg), :message (:message msg)})
@@ -67,21 +83,6 @@
           (>!! ch (box service-desc service th)))))
     ch))
 
-(def ^:dynamic *default-finder*)
-
-(defn register-service-finder
-  [finder]
-  {:pre [finder]}
-  (def ^:dynamic *default-finder* finder))
-
-(defn with-finder-fn
-  [finder f]
-  (binding [*default-finder* finder]
-    (f)))
-
-(defmacro with-finder
-  [finder & expr]
-  `(with-finder-fn ~finder (fn [] ~@expr)))
 
 (s/defn find-services :- [Service]
   [service-desc :- ServiceDescriptor

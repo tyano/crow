@@ -14,8 +14,8 @@
 
 (def should-stop (atom false))
 
-(defrecord JoinManager [registrars dead-registrars managed-services])
-(defn- join-manager [] (JoinManager. (ref #{}) (ref #{}) (ref #{})))
+(defrecord JoinManager [connection-factory registrars dead-registrars managed-services])
+(defn- join-manager [connection-factory] (JoinManager. connection-factory (ref #{}) (ref #{}) (ref #{})))
 
 
 
@@ -101,10 +101,10 @@
 
 (defn- join-service!
   "send a join request to a registrar and get a new service-id"
-  [join-mgr service {:keys [address port] :as registrar} timeout-ms send-retry-count send-retry-interval-ms]
+  [{:keys [connection-factory] :as join-mgr} service {:keys [address port] :as registrar} timeout-ms send-retry-count send-retry-interval-ms]
   (log/debug "Joinning" (pr-str service) "to" (pr-str registrar))
   (let [req (join-request (:address service) (:port service) (service-id service) (:name service) (:attributes service))
-        read-ch (request/send address port req timeout-ms send-retry-count send-retry-interval-ms)
+        read-ch (request/send connection-factory address port req timeout-ms send-retry-count send-retry-interval-ms)
         result-ch (chan)]
 
     (go
@@ -136,9 +136,9 @@
 (declare join)
 
 (defn- send-heart-beat!
-  [join-mgr service {:keys [address port] :as registrar} timeout-ms send-retry-count send-retry-interval-ms]
+  [{:keys [connection-factory] :as join-mgr} service {:keys [address port] :as registrar} timeout-ms send-retry-count send-retry-interval-ms]
   (let [req (heart-beat (service-id service))
-        read-ch (request/send address port req timeout-ms send-retry-count send-retry-interval-ms)
+        read-ch (request/send connection-factory address port req timeout-ms send-retry-count send-retry-interval-ms)
         result-ch (chan)]
     (go
       (let [result (try
@@ -279,7 +279,7 @@
         (recur)))))
 
 (defn- run-dead-registrar-checker
-  [join-mgr dead-registrar-check-interval timeout-ms send-retry-count send-retry-interval-ms]
+  [{:keys [connection-factory] :as join-mgr} dead-registrar-check-interval timeout-ms send-retry-count send-retry-interval-ms]
   (go-loop []
     (if @should-stop
       (do
@@ -289,7 +289,7 @@
         (doseq [{:keys [address port] :as registrar} @(:dead-registrars join-mgr)]
           (try
             (let [req (ping)
-                  resp (some-> (<! (request/send address port req timeout-ms send-retry-count send-retry-interval-ms)) (deref))]
+                  resp (some-> (<! (request/send connection-factory address port req timeout-ms send-retry-count send-retry-interval-ms)) (deref))]
              (cond
                (ack? resp)
                (do
@@ -310,11 +310,11 @@
         (recur)))))
 
 (defn start-join-manager
-  [registrar-source fetch-registrar-interval-ms dead-registrar-check-interval heart-beat-buffer-ms rejoin-interval-ms
+  [connection-factory registrar-source fetch-registrar-interval-ms dead-registrar-check-interval heart-beat-buffer-ms rejoin-interval-ms
    send-recv-timeout-ms send-retry-count send-retry-interval-ms]
   (let [service-ch (chan)
         join-ch    (chan)
-        join-mgr   (join-manager)]
+        join-mgr   (join-manager connection-factory)]
     (run-registrar-fetcher join-mgr registrar-source fetch-registrar-interval-ms)
     (run-service-acceptor join-mgr service-ch join-ch)
     (run-join-processor join-mgr join-ch send-recv-timeout-ms send-retry-count send-retry-interval-ms)

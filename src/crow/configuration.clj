@@ -25,7 +25,7 @@
         (throw (IllegalStateException. (str "No such function: " sym)))))
     sym))
 
-(def constructor-fn-keys #{:registrar-source :id-store :object-marshaller :middleware})
+(def constructor-fn-keys #{:registrar-source :id-store :object-marshaller :middleware :connection-factory})
 
 (defn- resolve-constructor-fn
   "resolve all keys in a configuration which might be a symbol or a string of

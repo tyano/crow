@@ -66,10 +66,10 @@
     {:client.config/channel-initializer initialize-channel}))
 
 (defn client
-  [address port]
+  [factory address port]
   (let [read-ch  (chan 500 unpacker)
         write-ch (chan 500 packer)]
-    (async-connect/connect bootstrap address port read-ch write-ch)))
+    (async-connect/connect factory address port read-ch write-ch)))
 
 (defmacro write-with-timeout
   [write-ch data timeout-ms]
@@ -101,7 +101,7 @@
         @(<! ch#))))
 
 (defn- try-send
-  [address port req timeout-ms send-retry-count send-retry-interval-ms]
+  [connection-factory address port req timeout-ms send-retry-count send-retry-interval-ms]
   (letfn [(retry-send
             [conn retry-count result]
             (when conn
@@ -125,7 +125,7 @@
             :else
             (throw+ {:type ::retry-count-over, :last-result result}))
 
-          (let [{:keys [:client/write-ch] :as conn} (client address port)
+          (let [{:keys [:client/write-ch] :as conn} (client connection-factory address port)
                 {:keys [type] :as c}
                     (try
                       (case (write-with-timeout write-ch {:message req :flush? true} timeout-ms)
@@ -153,12 +153,13 @@
 
 
 (defn send
-  ([ch address port req timeout-ms send-retry-count send-retry-interval-ms]
+  ([ch connection-factory address port req timeout-ms send-retry-count send-retry-interval-ms]
     (log/trace "send-recv-timeout:" timeout-ms)
     (let [result-ch (or ch (chan))]
 
       (go
-        (let [{:keys [:client/read-ch] :as conn} (<! (try-send address port req timeout-ms send-retry-count send-retry-interval-ms))]
+        (let [{:keys [:client/read-ch] :as conn}
+                  (<! (try-send connection-factory address port req timeout-ms send-retry-count send-retry-interval-ms))]
           (go
             (let [result (try
                             (let [msg (read-with-timeout read-ch timeout-ms)]
@@ -185,12 +186,12 @@
 
       result-ch))
 
-  ([address port req timeout-ms send-retry-count send-retry-interval-ms]
-    (send nil address port req timeout-ms send-retry-count send-retry-interval-ms))
+  ([connection-factory address port req timeout-ms send-retry-count send-retry-interval-ms]
+    (send nil connection-factory address port req timeout-ms send-retry-count send-retry-interval-ms))
 
-  ([ch address port req timeout-ms]
-    (send ch address port req timeout-ms 0 0))
+  ([ch connection-factory address port req timeout-ms]
+    (send ch connection-factory address port req timeout-ms 0 0))
 
-  ([address port req timeout-ms]
-    (send nil address port req timeout-ms)))
+  ([connection-factory address port req timeout-ms]
+    (send nil connection-factory address port req timeout-ms)))
 

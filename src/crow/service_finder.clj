@@ -17,13 +17,13 @@
 ;;; If 'ack' is returned, remove the registrar from dead-registrars ref and
 ;;; add it into active-registrars.
 (defn- start-check-dead-registrars-task
-  [finder]
+  [{:keys [connection-factory] :as finder}]
   (go-loop []
     (let [current-dead-registrars @(:dead-registrars finder)]
       (doseq [{:keys [address port] :as registrar} current-dead-registrars]
         (try
           (trace-pr "checking: " registrar)
-          (let [msg (some-> (<! (request/send address port (ping) nil)) (deref))]
+          (let [msg (some-> (<! (request/send connection-factory address port (ping) nil)) (deref))]
             (if (ack? msg)
               (do
                 (info-pr "registrar revived: " registrar)
@@ -74,13 +74,13 @@
 
 ;; STANDARD SERVICE FINDER
 
-(defrecord StandardServiceFinder [])
+(defrecord StandardServiceFinder [connection-factory])
 
 (defn standard-service-finder
-  [registrar-source]
+  [connection-factory registrar-source]
   {:pre [registrar-source]}
-  (-> (StandardServiceFinder.)
-    (init-service-finder registrar-source)))
+  (-> (StandardServiceFinder. connection-factory)
+      (init-service-finder registrar-source)))
 
 
 ;; CACHED SERVICE FINDER
@@ -101,7 +101,7 @@
   (find-services [finder service-desc] nil))
 
 (defrecord CachedServiceFinder
-  [service-map]
+  [connection-factory service-map]
 
   ServiceCache
   (clear-cache
@@ -136,9 +136,9 @@
         services))))
 
 (defn- send-ping
-  [finder {:keys [address port] :as service} timeout-ms send-retry-count send-retry-interval-ms]
+  [{:keys [connection-factory] :as finder} {:keys [address port] :as service} timeout-ms send-retry-count send-retry-interval-ms]
   (let [req (ping)
-        read-ch (request/send address port req timeout-ms send-retry-count send-retry-interval-ms)
+        read-ch (request/send connection-factory address port req timeout-ms send-retry-count send-retry-interval-ms)
         result-ch (chan)]
     (go
       (let [result (try
@@ -181,10 +181,10 @@
     (recur)))
 
 (defn cached-service-finder
-  [registrar-source check-interval-ms timeout-ms send-retry-count send-retry-interval-ms]
+  [connection-factory registrar-source check-interval-ms timeout-ms send-retry-count send-retry-interval-ms]
   {:pre [registrar-source]}
-  (let [finder (-> (CachedServiceFinder. (atom {}))
-                 (init-service-finder registrar-source))]
+  (let [finder (-> (CachedServiceFinder. connection-factory (atom {}))
+                   (init-service-finder registrar-source))]
     (start-check-cached-services-task finder check-interval-ms timeout-ms send-retry-count send-retry-interval-ms)
     finder))
 

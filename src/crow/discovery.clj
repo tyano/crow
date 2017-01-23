@@ -4,7 +4,6 @@
             [crow.request :as request]
             [crow.registrar-source :as source]
             [crow.service :as service]
-            [crow.request :as request]
             [crow.service-finder :refer [reset-registrars! abandon-registrar!] :as finder]
             [clojure.tools.logging :as log]
             [slingshot.slingshot :refer [throw+]]
@@ -14,14 +13,14 @@
 
 
 (defn- discover-with
-  [finder
+  [{:keys [connection-factory] :as finder}
    {:keys [address port] :as registrar}
    {:keys [service-name attributes] :as service-desc}
    {:keys [timeout-ms send-retry-count send-retry-interval-ms] :or {timeout-ms Long/MAX_VALUE send-retry-count 3 send-retry-interval-ms (long 500)} :as options}]
   (trace-pr "options:" options)
   (let [req     (discovery service-name attributes)
         result  (try
-                  (let [msg (some-> (<!! (request/send address port req timeout-ms send-retry-count send-retry-interval-ms))
+                  (let [msg (some-> (<!! (request/send connection-factory address port req timeout-ms send-retry-count send-retry-interval-ms))
                                     (deref))]
                     (cond
                       (service-found? msg)

@@ -11,7 +11,6 @@
                  [org.clojure/tools.logging "0.3.1"]
                  [slingshot "0.12.2"]
                  [com.shelf/messagepack-framedecoder "1.0-SNAPSHOT"]
-                 [prismatic/schema "1.1.3"]
                  [ns-tracker "0.3.0"]
                  [clj-http "3.4.1"]]
   :plugins [[lein-midje "3.2"]]

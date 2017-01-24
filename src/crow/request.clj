@@ -4,7 +4,6 @@
             [msgpack.core :refer [pack unpack refine-ext] :as msgpack]
             [clojure.tools.logging :as log]
             [crow.logging :refer [trace-pr]]
-            [schema.core :as s]
             [crow.logging :refer [trace-pr]]
             [slingshot.slingshot :refer [try+ throw+]]
             [clojure.core.async :refer [<! >! <!! >!! go go-loop alt! alts! thread chan] :as async]

@@ -62,7 +62,7 @@
   {:pre [registrar-source (s/valid? (s/keys :req [:async-connect.client/connection-factory]) finder)]}
   (let [finder (assoc finder
                   :service-finder/dead-registrar-check-interval-ms 30000
-                  :crow/registrar-source  registrar-source
+                  :service-finder/registrar-source registrar-source
                   :service-finder/active-registrars (ref #{})
                   :service-finder/dead-registrars   (ref #{}))]
     (start-check-dead-registrars-task finder)
@@ -78,7 +78,7 @@
     (dosync
       (alter active-registrars
         (fn [_]
-          (difference (set new-registrars) dead-registrars))))))
+          (difference (set new-registrars) @dead-registrars))))))
 
 (defn abandon-registrar!
   [{:keys [:service-finder/dead-registrars

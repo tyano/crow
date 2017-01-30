@@ -47,22 +47,6 @@
 (s/def :crow/call-options
   (s/keys :opt-un [:crow/timeout-ms]))
 
-(def ^:dynamic *default-finder*)
-
-(defn register-service-finder
-  [finder]
-  {:pre [finder]}
-  (def ^:dynamic *default-finder* finder))
-
-(defn with-finder-fn
-  [finder f]
-  (binding [*default-finder* finder]
-    (f)))
-
-(defmacro with-finder
-  [finder & expr]
-  `(with-finder-fn ~finder (fn [] ~@expr)))
-
 (s/fdef invoke
   :args (s/cat :ch :async/channel
                :factory :async-connect.client/connection-factory
@@ -199,7 +183,7 @@
   ([finder service-namespace attributes call-list options]
     `(async (chan) ~finder ~service-namespace ~attributes ~call-list ~options)))
 
-(defn- handle-result
+(defn handle-result
   [finder result]
   (try
     (unbox result)

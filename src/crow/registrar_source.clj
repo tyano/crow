@@ -1,11 +1,15 @@
 (ns crow.registrar-source
   (:require [clojure.string :refer [split]]
-            [clj-http.client :as http])
+            [clj-http.client :as http]
+            [clojure.spec :as s])
   (:import [java.io BufferedReader StringReader]))
 
 
 (defprotocol RegistrarSource
   (registrars [source] "fetch address and port of service registrars. the return value is a vector of maps with keys :address and :port."))
+
+
+(s/def :crow/registrar-source #(satisfies? RegistrarSource %))
 
 ;;; An implementation of RegistrarSource which fetchs text from
 ;;; remote http resource accessible by 'source-url'.

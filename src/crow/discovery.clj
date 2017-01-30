@@ -49,19 +49,23 @@
     result))
 
 (defn discover
-  [finder {:keys [service-name attributes] :as service-desc} options]
+  [{:keys [:service-finder/active-registrars
+           :crow/registrar-source]
+      :as finder}
+   {:keys [service-name attributes] :as service-desc}
+   options]
   ;; find services from a cache if finder has a cache.
   (if-let [services (seq (finder/find-services finder service-desc))]
     services
     (do
-      (when-not (seq @(:active-registrars finder))
+      (when-not (seq @active-registrars)
         (reset-registrars! finder))
-      (if-let [registrars (seq @(:active-registrars finder))]
+      (if-let [registrars (seq @active-registrars)]
         (loop [regs (shuffle registrars) result nil]
           (cond
             result result
-            (not (seq regs)) (throw+ {:type ::service-not-found, :source (:registrar-source finder)})
+            (not (seq regs)) (throw+ {:type ::service-not-found, :source registrar-source})
             :else (let [reg (first regs)]
                     (recur (rest regs) (discover-with finder reg service-desc options)))))
-        (throw+ {:type ::registrar-doesnt-exist, :source (:registrar-source finder)})))))
+        (throw+ {:type ::registrar-doesnt-exist, :source registrar-source})))))
 

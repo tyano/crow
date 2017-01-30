@@ -6,20 +6,33 @@
             [crow.registrar-source :as source]
             [clojure.tools.logging :as log]
             [crow.logging :refer [trace-pr info-pr]]
-            [async-connect.box :refer [boxed]]))
+            [async-connect.box :refer [boxed]]
+            [clojure.spec :as s]
+            [async-connect.client]))
 
-(def ^:dynamic *dead-registrar-check-interval-ms* 30000)
-
-
+(s/def :service-finder/dead-registrar-check-interval-ms pos-int?)
+(s/def :service-finder/active-registrars #(instance? clojure.lang.Ref %))
+(s/def :service-finder/dead-registrars #(instance? clojure.lang.Ref %))
+(s/def :crow/service-finder
+  (s/keys :req [:async-connect.client/connection-factory
+                :crow/registrar-source
+                :service-finder/dead-registrar-check-interval-ms
+                :service-finder/active-registrars
+                :service-finder/dead-registrars]))
 
 ;;; checker thread for dead registrars.
 ;;; If a dead registrar revived, it will return 'ack' for 'ping' request.
 ;;; If 'ack' is returned, remove the registrar from dead-registrars ref and
 ;;; add it into active-registrars.
 (defn- start-check-dead-registrars-task
-  [{:keys [connection-factory] :as finder}]
+  [{:keys [:async-connect.client/connection-factory
+           :service-finder/dead-registrar-check-interval-ms
+           :service-finder/dead-registrars
+           :service-finder/active-registrars]
+      :or {dead-registrar-check-interval-ms 30000}
+      :as finder}]
   (go-loop []
-    (let [current-dead-registrars @(:dead-registrars finder)]
+    (let [current-dead-registrars @dead-registrars]
       (doseq [{:keys [address port] :as registrar} current-dead-registrars]
         (try
           (trace-pr "checking: " registrar)
@@ -28,12 +41,12 @@
               (do
                 (info-pr "registrar revived: " registrar)
                 (dosync
-                  (alter (:dead-registrars finder) disj registrar)
-                  (alter (:active-registrars finder) conj registrar)))
+                  (alter dead-registrars disj registrar)
+                  (alter active-registrars conj registrar)))
               (log/error (str "Invalid response:" msg))))
           (catch Throwable e
             (log/debug e))))
-      (<! (timeout *dead-registrar-check-interval-ms*))
+      (<! (timeout dead-registrar-check-interval-ms))
       (recur))))
 
 
@@ -46,40 +59,42 @@
   starts a go-loop for the task.
     returns a initialized service-finder."
   [finder registrar-source]
-  {:pre [registrar-source (or (nil? finder) (associative? finder))]}
+  {:pre [registrar-source (s/valid? (s/keys :req [:async-connect.client/connection-factory]) finder)]}
   (let [finder (assoc finder
-                  :registrar-source  registrar-source
-                  :active-registrars (ref #{})
-                  :dead-registrars   (ref #{}))]
+                  :service-finder/dead-registrar-check-interval-ms 30000
+                  :crow/registrar-source  registrar-source
+                  :service-finder/active-registrars (ref #{})
+                  :service-finder/dead-registrars   (ref #{}))]
     (start-check-dead-registrars-task finder)
     finder))
 
 ;; COMMON FUNCTIONS FOR SERVICE FINDER
 
 (defn reset-registrars!
-  [finder]
-  (let [new-registrars (source/registrars (:registrar-source finder))]
+  [{:keys [:service-finder/registrar-source
+           :service-finder/dead-registrars
+           :service-finder/active-registrars]}]
+  (let [new-registrars (source/registrars registrar-source)]
     (dosync
-      (alter (:active-registrars finder)
+      (alter active-registrars
         (fn [_]
-          (difference (set new-registrars) @(:dead-registrars finder)))))))
+          (difference (set new-registrars) dead-registrars))))))
 
 (defn abandon-registrar!
-  [finder reg]
+  [{:keys [:service-finder/dead-registrars
+           :service-finder/active-registrars]}
+   reg]
   (dosync
-    (let [other-reg (first (shuffle (alter (:active-registrars finder) disj reg)))]
-      (alter (:dead-registrars finder) conj reg)
+    (let [other-reg (first (shuffle (alter active-registrars disj reg)))]
+      (alter dead-registrars conj reg)
       other-reg)))
 
 
 ;; STANDARD SERVICE FINDER
-
-(defrecord StandardServiceFinder [connection-factory])
-
 (defn standard-service-finder
   [connection-factory registrar-source]
   {:pre [registrar-source]}
-  (-> (StandardServiceFinder. connection-factory)
+  (-> {:async-connect.client/connection-factory connection-factory}
       (init-service-finder registrar-source)))
 
 
@@ -101,7 +116,7 @@
   (find-services [finder service-desc] nil))
 
 (defrecord CachedServiceFinder
-  [connection-factory service-map]
+  [service-map]
 
   ServiceCache
   (clear-cache
@@ -136,7 +151,12 @@
         services))))
 
 (defn- send-ping
-  [{:keys [connection-factory] :as finder} {:keys [address port] :as service} timeout-ms send-retry-count send-retry-interval-ms]
+  [{:keys [:async-connect.client/connection-factory] :as finder}
+   {:keys [address port] :as service}
+   timeout-ms
+   send-retry-count
+   send-retry-interval-ms]
+
   (let [req (ping)
         read-ch (request/send connection-factory address port req timeout-ms send-retry-count send-retry-interval-ms)
         result-ch (chan)]
@@ -183,7 +203,8 @@
 (defn cached-service-finder
   [connection-factory registrar-source check-interval-ms timeout-ms send-retry-count send-retry-interval-ms]
   {:pre [registrar-source]}
-  (let [finder (-> (CachedServiceFinder. connection-factory (atom {}))
+  (let [finder (-> (CachedServiceFinder. (atom {}))
+                   (assoc :async-connect.client/connection-factory connection-factory)
                    (init-service-finder registrar-source))]
     (start-check-cached-services-task finder check-interval-ms timeout-ms send-retry-count send-retry-interval-ms)
     finder))

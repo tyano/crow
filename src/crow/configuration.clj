@@ -13,30 +13,6 @@
   [config]
   (assert (map? config) "A configuration file must return a map containing service configurations."))
 
-(defn- exec-constructor
-  "convert a value to a function if the value is a symbol or a string for a function."
-  [sym config]
-  (if (or (symbol? sym) (string? sym))
-    (let [fn-sym (if (symbol? sym) sym (symbol sym))
-          fn-ns  (namespace fn-sym)]
-      (require (symbol fn-ns))
-      (if-let [resolved-fn (find-var fn-sym)]
-        (resolved-fn config)
-        (throw (IllegalStateException. (str "No such function: " sym)))))
-    sym))
-
-(def constructor-fn-keys #{:registrar-source :id-store :object-marshaller :middleware :connection-factory})
-
-(defn- resolve-constructor-fn
-  "resolve all keys in a configuration which might be a symbol or a string of
-  constructor-function. if a fn is resolved, the fn will be executed with 'config' as a argument."
-  [config]
-  (when config
-    (loop [c config ks constructor-fn-keys]
-      (if-let [k (first ks)]
-        (recur (update c k #(exec-constructor % config)) (rest ks))
-        c))))
-
 (defn from-path
   "Create a configuration-map from a source path.
   The file must be a readable clojure source file and must return a map for evaluation.
@@ -44,8 +20,7 @@
   the path is trusted for evaluation."
   [file-path]
   (let [config (read-from-file file-path)]
-    (assert-map config)
-    (resolve-constructor-fn config)))
+    (assert-map config)))
 
 (defn from-edn
   "read a path containing EDN string.
@@ -55,6 +30,5 @@
   [file-path]
   (with-open [stream (PushbackReader. (reader file-path))]
     (let [config (edn/read stream)]
-      (assert-map config)
-      (resolve-constructor-fn config))))
+      (assert-map config))))
 

@@ -122,7 +122,7 @@
     :else (invalid-message msg)))
 
 (defn- make-service-handler
-  [handler-map service timeout-ms & [{:keys [middleware]}]]
+  [handler-map service timeout-ms & [{:keys [:crow/middleware]}]]
   (fn [read-ch write-ch]
     (go-loop []
       (when-let [msg (<! read-ch)]
@@ -163,11 +163,25 @@
     (addLast "bytes-encoder" (ByteArrayEncoder.))))
 
 (defn start-service
-  [{:keys [connection-factory address port name attributes id-store registrar-source
-           fetch-registrar-interval-ms heart-beat-buffer-ms dead-registrar-check-interval
-           rejoin-interval-ms send-recv-timeout
-           send-retry-count send-retry-interval-ms]
-      :or {address "localhost" attributes {} send-recv-timeout nil send-retry-count 3 send-retry-interval-ms 500}
+  [{:keys [:service/address
+           :service/port
+           :service/name
+           :service/attributes
+           :service/id-store
+           :join-manager/fetch-registrar-interval-ms
+           :join-manager/heart-beat-buffer-ms
+           :join-manager/dead-registrar-check-interval
+           :join-manager/rejoin-interval-ms
+           :join-manager/send-recv-timeout
+           :join-manager/send-retry-count
+           :join-manager/send-retry-interval-ms
+           :join-manager/connection-factory
+           :join-manager/registrar-source]
+      :or {address "localhost"
+           attributes {}
+           send-recv-timeout nil
+           send-retry-count 3
+           send-retry-interval-ms 500}
       :as config}
    handler-map]
   {:pre [port (not (clojure.string/blank? name)) id-store registrar-source fetch-registrar-interval-ms heart-beat-buffer-ms]}

@@ -104,8 +104,8 @@
   (letfn [(retry-send
             [conn retry-count result]
             (when conn
-              (async-connect/close conn)
-              (log/trace "channel closed."))
+              (async-connect/close conn true)
+              (log/debug "channel closed."))
             (Thread/sleep (* send-retry-interval-ms retry-count))
             (when (<= retry-count send-retry-count)
               (log/info (format "retry! -- times: %d/%d" retry-count send-retry-count)))
@@ -166,6 +166,7 @@
                                 ::timeout
                                 (do
                                   (log/error (str "Timeout: Couldn't receive a response for a req: " (pr-str req)))
+                                  (async-connect/close conn true)
                                   ::timeout)
 
                                 nil

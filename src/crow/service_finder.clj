@@ -13,9 +13,11 @@
 (s/def :service-finder/dead-registrar-check-interval-ms pos-int?)
 (s/def :service-finder/active-registrars #(instance? clojure.lang.Ref %))
 (s/def :service-finder/dead-registrars #(instance? clojure.lang.Ref %))
+(s/def :service-finder/connection-factory :async-connect.client/connection-factory)
+(s/def :service-finder/registrar-source :crow/registrar-source)
 (s/def :crow/service-finder
-  (s/keys :req [:async-connect.client/connection-factory
-                :crow/registrar-source
+  (s/keys :req [:service-finder/connection-factory
+                :service-finder/registrar-source
                 :service-finder/dead-registrar-check-interval-ms
                 :service-finder/active-registrars
                 :service-finder/dead-registrars]))
@@ -25,7 +27,7 @@
 ;;; If 'ack' is returned, remove the registrar from dead-registrars ref and
 ;;; add it into active-registrars.
 (defn- start-check-dead-registrars-task
-  [{:keys [:async-connect.client/connection-factory
+  [{:keys [:service-finder/connection-factory
            :service-finder/dead-registrar-check-interval-ms
            :service-finder/dead-registrars
            :service-finder/active-registrars]
@@ -59,7 +61,7 @@
   starts a go-loop for the task.
     returns a initialized service-finder."
   [finder registrar-source]
-  {:pre [registrar-source (s/valid? (s/keys :req [:async-connect.client/connection-factory]) finder)]}
+  {:pre [registrar-source (s/valid? (s/keys :req [:service-finder/connection-factory]) finder)]}
   (let [finder (assoc finder
                   :service-finder/dead-registrar-check-interval-ms 30000
                   :service-finder/registrar-source registrar-source
@@ -94,7 +96,7 @@
 (defn standard-service-finder
   [connection-factory registrar-source]
   {:pre [registrar-source]}
-  (-> {:async-connect.client/connection-factory connection-factory}
+  (-> {:service-finder/connection-factory connection-factory}
       (init-service-finder registrar-source)))
 
 
@@ -151,7 +153,7 @@
         services))))
 
 (defn- send-ping
-  [{:keys [:async-connect.client/connection-factory] :as finder}
+  [{:keys [:service-finder/connection-factory] :as finder}
    {:keys [address port] :as service}
    timeout-ms
    send-retry-count
@@ -168,7 +170,7 @@
                             true
 
                             :else
-                             (throw (IllegalStateException. "Unknown response"))))
+                             (throw (IllegalStateException. (str "Unknown response: " (pr-str resp))))))
 
                       (catch Throwable th
                         ;; a service doesn't respond.
@@ -204,7 +206,7 @@
   [connection-factory registrar-source check-interval-ms timeout-ms send-retry-count send-retry-interval-ms]
   {:pre [registrar-source]}
   (let [finder (-> (CachedServiceFinder. (atom {}))
-                   (assoc :async-connect.client/connection-factory connection-factory)
+                   (assoc :service-finder/connection-factory connection-factory)
                    (init-service-finder registrar-source))]
     (start-check-cached-services-task finder check-interval-ms timeout-ms send-retry-count send-retry-interval-ms)
     finder))

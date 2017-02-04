@@ -13,7 +13,7 @@
 
 
 (defn- discover-with
-  [{:keys [connection-factory] :as finder}
+  [{:keys [:service-finder/connection-factory] :as finder}
    {:keys [address port] :as registrar}
    {:keys [service-name attributes] :as service-desc}
    {:keys [timeout-ms send-retry-count send-retry-interval-ms] :or {timeout-ms Long/MAX_VALUE send-retry-count 3 send-retry-interval-ms (long 500)} :as options}]
@@ -50,7 +50,7 @@
 
 (defn discover
   [{:keys [:service-finder/active-registrars
-           :crow/registrar-source]
+           :service-finder/registrar-source]
       :as finder}
    {:keys [service-name attributes] :as service-desc}
    options]

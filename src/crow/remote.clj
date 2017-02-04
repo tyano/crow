@@ -126,12 +126,12 @@
 
 (defn async-fn
   [ch
-   {:keys [:async-connect.client/connection-factory]
+   {:keys [:service-finder/connection-factory]
       :as finder}
    service-desc
    call-desc
    options]
-  (debug-pr (str "remote call. service: " (pr-str service-desc) ", fn: " (pr-str call-desc)))
+  (log/debug (str "remote call. service: " (pr-str service-desc) ", fn: " (pr-str call-desc)))
   (if-let [service (find-service finder service-desc options)]
     (invoke ch connection-factory service-desc service call-desc options)
     (throw (IllegalStateException. (format "Service Not Found: service-name=%s, attributes=%s"
@@ -162,7 +162,7 @@
           fn-name (last ns-fn-coll)
           args (vec (rest call-list))]
       `(vector
-          {:service-name ~target-ns
+          {:service-name ~service-name
            :attributes ~attributes}
           {:target-ns ~target-ns
            :fn-name ~fn-name
@@ -228,7 +228,7 @@
   [ch finder service-desc call-desc options]
   (fn []
     (try+
-      (<!!+ (async-fn ch finder service-desc call-desc options))
+      (<!!+ (async-fn ch finder service-desc call-desc options) finder)
       (catch [:type ::connection-error] _
         (:object &throw-context))
       (catch ConnectException ex
@@ -306,6 +306,8 @@
 
   ([ch finder service-namespace attributes call-list opts]
     `(let [[service-desc# call-desc#] (parse-call-list ~service-namespace ~attributes ~call-list)]
+        (log/debug (str "service-desc: " (pr-str service-desc#)))
+        (log/debug (str "call-desc: " (pr-str call-desc#)))
         (try-call ~ch ~finder service-desc# call-desc# ~opts)))
 
   ([finder service-namespace attributes call-list opts]

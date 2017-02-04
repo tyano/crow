@@ -32,7 +32,7 @@
   [target-var]
   (let [metadata (meta target-var)]
     {:handler-namespace (-> metadata :ns ns-name name)
-     :handler-name (-> metadata :name)
+     :handler-name (-> metadata :name name)
      :handler-fn   target-var}))
 
 (defmacro handler

@@ -72,14 +72,11 @@
 (defn build-handler-map-from-namespace
   ([target-ns xf]
     (let [base-tr  (filter #(fn? (var-get %)))
-          mapper   (map var-handler)
-          tr       (if xf
-                     (comp base-tr xf mapper)
-                     (comp base-tr mapper))
-          handlers (sequence tr (vals (ns-publics target-ns)))]
+          xforms   (comp base-tr xf)
+          handlers (sequence xforms (vals (ns-publics target-ns)))]
       (apply build-handler-map {} handlers)))
   ([target-ns]
-    (build-handler-map-from-namespace target-ns nil)))
+    (build-handler-map-from-namespace target-ns (map var-handler))))
 
 ;; SERVER IMPLEMENTATIONS
 

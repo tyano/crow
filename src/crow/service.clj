@@ -28,12 +28,19 @@
      :name handler-name}
     handler-fn))
 
+(defn fn-handler
+  [handler-ns handler-name handler-fn]
+  {:handler-namespace handler-ns
+   :handler-name handler-name
+   :handler-fn handler-fn})
+
 (defn var-handler
   [target-var]
   (let [metadata (meta target-var)]
-    {:handler-namespace (-> metadata :ns ns-name name)
-     :handler-name (-> metadata :name name)
-     :handler-fn   target-var}))
+    (fn-handler
+      (-> metadata :ns ns-name name)
+      (-> metadata :name name)
+      target-var)))
 
 (defmacro handler
   [fn-name & handler-descs]

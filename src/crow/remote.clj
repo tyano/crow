@@ -1,119 +1,139 @@
 (ns crow.remote
-  (:refer-clojure :exclude [send])
   (:require [crow.protocol :refer [remote-call call-result? call-exception? protocol-error?]]
-            [crow.request :refer [send] :as request]
+            [crow.request :as request]
             [crow.boxed :refer [box unbox service-info]]
-            [manifold.deferred :refer [chain] :as d]
-            [clojure.core.async :refer [>!! chan <!! <! close!]]
+            [clojure.core.async :refer [>!! chan <!! <! close! go]]
+            [clojure.core.async.impl.protocols :refer [ReadPort WritePort]]
             [crow.discovery :refer [discover]]
             [crow.service-finder :refer [standard-service-finder] :as finder]
             [crow.logging :refer [debug-pr]]
             [clojure.tools.logging :as log]
             [slingshot.slingshot :refer [try+ throw+]]
-            [schema.core :as s])
+            [clojure.spec :as s])
   (:import [java.net ConnectException]))
 
-(s/defrecord ServiceDescriptor
-  [service-name :- s/Str
-   attributes   :- (s/maybe {s/Keyword s/Any})])
+(s/def :async/channel (s/and #(satisfies? ReadPort %) #(satisfies? WritePort %)))
 
-(s/defrecord CallDescriptor
-  [target-ns      :- s/Str
-   fn-name        :- s/Str
-   args           :- (s/maybe [s/Any])])
+(s/def :crow/service-name string?)
+(s/def :crow/attributes (s/nilable (s/map-of keyword? any?)))
+(s/def :crow/service-descriptor
+  (s/keys :req-un [:crow/service-name :crow/attributes]))
 
-(def DiscoveryOptions {(s/optional-key :timeout-ms) s/Num
-                       (s/optional-key :send-retry-count) s/Num
-                       (s/optional-key :send-retry-interval-ms) s/Num
-                       (s/optional-key :remote-call-retry-count) s/Num
-                       (s/optional-key :remote-call-retry-interval-ms) s/Num
-                       s/Keyword s/Any})
+(s/def :crow/target-ns string?)
+(s/def :crow/fn-name string?)
+(s/def :crow/fn-args (s/nilable (s/coll-of any?)))
+(s/def :crow/call-descriptor
+  (s/keys :req-un [:crow/target-ns
+                   :crow/fn-name
+                   :crow/fn-args]))
 
-(def Service {:address  s/Str
-              :port     s/Num
-              s/Keyword s/Any})
+(s/def :crow/timeout-ms pos-int?)
+(s/def :crow/send-retry-count pos-int?)
+(s/def :crow/send-retry-interval-ms pos-int?)
+(s/def :crow/remote-call-retry-count pos-int?)
+(s/def :crow/remote-call-retry-interval-ms pos-int?)
+(s/def :crow/discovery-options
+  (s/keys :opt-un [:crow/timeout-ms
+                   :crow/send-retry-count
+                   :crow/send-retry-interval-ms
+                   :crow/remote-call-retry-count
+                   :crow/remote-call-retry-interval-ms]))
 
-(def CallOptions {(s/optional-key :timeout-ms) s/Num
-                  s/Keyword s/Any})
+(s/def :crow/address string?)
+(s/def :crow/port pos-int?)
+(s/def :crow/service
+  (s/keys :req-un [:crow/address, :crow/port]))
 
-(s/defn invoke
-  [ch :- s/Any
-   service-desc :- ServiceDescriptor
-   {:keys [address port] :as service} :- Service
-   {:keys [target-ns fn-name args]} :- CallDescriptor
-   {:keys [timeout-ms send-retry-count send-retry-interval-ms], :or {send-retry-count 3, send-retry-interval-ms 500}} :- DiscoveryOptions]
-  (let [msg (remote-call target-ns fn-name args)]
-    (-> (send address port msg timeout-ms send-retry-count send-retry-interval-ms)
-        (chain
-          (fn [msg]
-            (cond
-              (protocol-error? msg)
-              (throw+ {:type :protocol-error, :error-code (:error-code msg), :message (:message msg)})
+(s/def :crow/call-options
+  (s/keys :opt-un [:crow/timeout-ms]))
 
-              (call-exception? msg)
-              (let [type-str    (:type msg)
-                    stack-trace (:stack-trace msg)]
-                (throw+ {:type (keyword type-str)} stack-trace))
+(s/fdef invoke
+  :args (s/cat :ch :async/channel
+               :factory :async-connect.client/connection-factory
+               :service-desc :crow/service-descriptor
+               :service :crow/service
+               :call-desc :crow/call-descriptor
+               :discovery-opts :crow/discovery-options)
+  :ret  :async/channel)
 
-              (call-result? msg)
-              (:obj msg)
+(defn invoke
+  [ch
+   factory
+   service-desc
+   {:keys [address port] :as service}
+   {:keys [target-ns fn-name fn-args]}
+   {:keys [timeout-ms send-retry-count send-retry-interval-ms]
+      :or {send-retry-count 3, send-retry-interval-ms 500}}]
 
-              (identical? request/drained msg)
-              (do
-                (log/debug "DRAINED!")
-                nil)
+  (let [msg (remote-call target-ns fn-name fn-args)]
+    (go
+      (try
+        (let [msg  (some-> (<! (request/send factory address port msg timeout-ms send-retry-count send-retry-interval-ms)) (deref))
+              resp (cond
+                      (protocol-error? msg)
+                      (throw+ {:type :protocol-error, :error-code (:error-code msg), :message (:message msg)})
 
-              (identical? request/timeout msg)
-              msg
+                      (call-exception? msg)
+                      (let [type-str    (:type msg)
+                            stack-trace (:stack-trace msg)]
+                        (throw+ {:type (keyword type-str)} stack-trace))
 
-              :else
-              (throw (IllegalStateException. (str "No such message format: " (pr-str msg))))))
-          (fn [msg']
-            (>!! ch (box service-desc service msg'))))
+                      (call-result? msg)
+                      (:obj msg)
 
-        (d/catch
-          (fn [th]
-            (>!! ch (box service-desc service th))))
-        (d/finally
-          (fn [] (close! ch))))
+                      (identical? :crow.request/timeout msg)
+                      msg
+
+                      :else
+                      (throw (IllegalStateException. (str "No such message format: " (pr-str msg)))))]
+          (>!! ch (box resp)))
+        (catch Throwable th
+          (>!! ch (box service-desc service th)))))
     ch))
 
-(def ^:dynamic *default-finder*)
 
-(defn register-service-finder
-  [finder]
-  {:pre [finder]}
-  (def ^:dynamic *default-finder* finder))
+(s/fdef find-services
+  :args (s/cat :finder :crow/service-finder
+               :service-desc :crow/service-descriptor
+               :options :crow/discovery-options)
+  :ret  (s/coll-of :crow/service))
 
-(defn with-finder-fn
-  [finder f]
-  (binding [*default-finder* finder]
-    (f)))
-
-(defmacro with-finder
-  [finder & expr]
-  `(with-finder-fn ~finder (fn [] ~@expr)))
-
-(s/defn find-services :- [Service]
-  [service-desc :- ServiceDescriptor
-   options :- DiscoveryOptions]
-  (when-not *default-finder*
+(defn find-services
+  [finder service-desc options]
+  (when-not finder
     (throw+ {:type :finder-not-found, :message "ServiceFinder doesn't exist! You must start a service finder by start-service-finder at first!"}))
-  (discover *default-finder* service-desc options))
+  (discover finder service-desc options))
 
-(s/defn find-service :- Service
-  [service-desc :- ServiceDescriptor
-   options      :- DiscoveryOptions]
-  (first (shuffle (find-services service-desc options))))
 
-(s/defn async-fn :- s/Any
+(s/fdef find-service
+  :args (s/cat :finder :crow/service-finder
+               :service-desc :crow/service-descriptor
+               :options :crow/discovery-options)
+  :ret  :crow/service)
+
+(defn find-service
+  [finder service-desc options]
+  (first (shuffle (find-services finder service-desc options))))
+
+
+(s/fdef async-fn
+  :args (s/cat :ch :async/channel
+               :finder :crow/service-finder
+               :service-desc :crow/service-descriptor
+               :call-desc :crow/call-desc
+               :options :crow/call-options)
+  :ret  :async/channel)
+
+(defn async-fn
   [ch
-   service-desc :- ServiceDescriptor
-   call-desc    :- CallDescriptor
-   options      :- CallOptions]
-  (debug-pr (str "remote call. service: " (pr-str service-desc) ", fn: " (pr-str call-desc)))
-  (if-let [service (find-service service-desc options)]
-    (invoke ch service-desc service call-desc options)
+   {:keys [:service-finder/connection-factory]
+      :as finder}
+   service-desc
+   call-desc
+   options]
+  (log/debug (str "remote call. service: " (pr-str service-desc) ", fn: " (pr-str call-desc)))
+  (if-let [service (find-service finder service-desc options)]
+    (invoke ch connection-factory service-desc service call-desc options)
     (throw (IllegalStateException. (format "Service Not Found: service-name=%s, attributes=%s"
                                       (:service-name service-desc)
                                       (pr-str (:attributes service-desc)))))))
@@ -127,8 +147,11 @@
           fn-name (last ns-fn-coll)
           args (vec (rest call-list))]
       `(vector
-          (ServiceDescriptor. ~target-ns {})
-          (CallDescriptor. ~target-ns ~fn-name ~args))))
+          {:service-name ~target-ns
+           :attributes {}}
+          {:target-ns ~target-ns
+           :fn-name ~fn-name
+           :fn-args ~args})))
 
   ([service-namespace attributes call-list]
     (let [service-name (name service-namespace)
@@ -139,31 +162,34 @@
           fn-name (last ns-fn-coll)
           args (vec (rest call-list))]
       `(vector
-          (ServiceDescriptor. ~service-name ~attributes)
-          (CallDescriptor. ~target-ns ~fn-name ~args)))))
+          {:service-name ~service-name
+           :attributes ~attributes}
+          {:target-ns ~target-ns
+           :fn-name ~fn-name
+           :fn-args ~args}))))
 
 (defmacro async
-  ([ch call-list options]
+  ([ch finder call-list options]
    `(let [[service-desc# call-desc#] (parse-call-list ~call-list)]
-      (async-fn ~ch service-desc# call-desc# ~options)))
+      (async-fn ~ch ~finder service-desc# call-desc# ~options)))
 
-  ([call-list options]
-    `(async (chan) ~call-list ~options))
+  ([finder call-list options]
+    `(async (chan) ~finder ~call-list ~options))
 
-  ([ch service-namespace attributes call-list options]
+  ([ch finder service-namespace attributes call-list options]
    `(let [[service-desc# call-desc#] (parse-call-list ~service-namespace ~attributes ~call-list)]
-      (async-fn ~ch service-desc# call-desc# ~options)))
+      (async-fn ~ch ~finder service-desc# call-desc# ~options)))
 
-  ([service-namespace attributes call-list options]
-    `(async (chan) ~service-namespace ~attributes ~call-list ~options)))
+  ([finder service-namespace attributes call-list options]
+    `(async (chan) ~finder ~service-namespace ~attributes ~call-list ~options)))
 
 (defn handle-result
-  [result]
+  [finder result]
   (try
     (unbox result)
     (catch Throwable th
       (when-let [[service service-desc] (service-info result)]
-        (finder/remove-service *default-finder* service-desc service))
+        (finder/remove-service finder service-desc service))
       (throw th))))
 
 (defn <!!+
@@ -172,10 +198,10 @@
    result.
    This fn is a kind of <!! macro of core.async, so calling
    this fn will block current thread."
-  [ch]
+  [ch finder]
   (when ch
     (when-let [result (<!! ch)]
-      (handle-result result))))
+      (handle-result finder result))))
 
 (defmacro <!+
   "read a channel. if the result value is an instance of
@@ -184,20 +210,26 @@
    This macro is a kind of <! macro of core.async, so this macro
    must be called in (go) block. it it why this is a macro, not fn.
    all contents of this macro is expanded into a go block."
-  [ch]
-  `(when-let [ch# ~ch]
+  [ch finder]
+  `(let [ch# ~ch
+         finder# ~finder]
       (when-let [result# (<! ch#)]
-        (handle-result result#))))
+        (handle-result finder# result#))))
 
-(s/defn ^:private make-call-fn
-  [ch
-   service-desc :- ServiceDescriptor
-   call-desc :- CallDescriptor
-   options :- CallOptions]
+(s/fdef make-call-fn
+  :args (s/cat :ch :async/channel
+               :finder :crow/service-finder
+               :service-desc :crow/service-descriptor
+               :call-desc :crow/call-descriptor
+               :options :crow/call-options)
+  :ret  (s/fspec :args empty? :ret any?))
+
+(defn- make-call-fn
+  [ch finder service-desc call-desc options]
   (fn []
     (try+
-      (<!!+ (async-fn ch service-desc call-desc options))
-      (catch [:type :crow.request/connection-error] _
+      (<!!+ (async-fn ch finder service-desc call-desc options) finder)
+      (catch [:type ::connection-error] _
         (:object &throw-context))
       (catch ConnectException ex
         ex))))
@@ -205,13 +237,13 @@
 
 (defn- timeout?
   [msg]
-  (when msg (identical? msg request/timeout)))
+  (boolean (when msg (identical? msg :crow.request/timeout))))
 
 (defn- connection-error?
   [msg]
   (when msg
     (and (associative? msg)
-         (= :crow.request/connection-error (:type msg)))))
+         (= ::connection-error (:type msg)))))
 
 (defn- connect-exception?
   [msg]
@@ -223,19 +255,26 @@
   (when msg
     (or (timeout? msg) (connection-error? msg) (connect-exception? msg))))
 
-(s/defn try-call
-  [ch
-   service-desc :- ServiceDescriptor
-   call-desc :- CallDescriptor
-   {:keys [remote-call-retry-count remote-call-retry-interval-ms]
-    :or {remote-call-retry-count 3 remote-call-retry-interval-ms 500} :as options} :- CallOptions]
 
-  (let [call-fn (make-call-fn ch service-desc call-desc options)]
+(s/fdef try-call
+  :args (s/cat :ch :async/channel
+               :finder :crow/service-finder
+               :service-desc :crow/service-descriptor
+               :call-desc :crow/call-descriptor
+               :call-opts :crow/call-options)
+  :ret  any?)
+
+(defn try-call
+  [ch finder service-desc call-desc
+   {:keys [remote-call-retry-count remote-call-retry-interval-ms]
+    :or {remote-call-retry-count 3 remote-call-retry-interval-ms 500} :as options}]
+
+  (let [call-fn (make-call-fn ch finder service-desc call-desc options)]
     (loop [result nil retry 0]
       (if (> retry remote-call-retry-count)
         (cond
           (timeout? result)
-          (throw+ {:type :crow.request/connection-error, :kind (:type result)})
+          (throw+ {:type ::connection-error, :kind (:type result)})
 
           (connection-error? result)
           (throw+ result)
@@ -258,29 +297,29 @@
             r))))))
 
 (defmacro call
-  ([ch call-list opts]
+  ([ch finder call-list opts]
     `(let [[service-desc# call-desc#] (parse-call-list ~call-list)]
-        (try-call ~ch service-desc# call-desc# ~opts)))
+        (try-call ~ch ~finder service-desc# call-desc# ~opts)))
 
-  ([call-list opts]
-    `(call (chan) ~call-list ~opts))
+  ([finder call-list opts]
+    `(call (chan) ~finder ~call-list ~opts))
 
-  ([ch service-namespace attributes call-list opts]
+  ([ch finder service-namespace attributes call-list opts]
     `(let [[service-desc# call-desc#] (parse-call-list ~service-namespace ~attributes ~call-list)]
-        (try-call ~ch service-desc# call-desc# ~opts)))
+        (log/debug (str "service-desc: " (pr-str service-desc#)))
+        (log/debug (str "call-desc: " (pr-str call-desc#)))
+        (try-call ~ch ~finder service-desc# call-desc# ~opts)))
 
-  ([service-namespace attributes call-list opts]
-    `(call (chan) ~service-namespace ~attributes ~call-list ~opts)))
-
-(defn current-finder [] *default-finder*)
+  ([finder service-namespace attributes call-list opts]
+    `(call (chan) ~finder ~service-namespace ~attributes ~call-list ~opts)))
 
 (defmacro with-service
-  ([ch service call-list opts]
+  ([ch factory service call-list opts]
    `(let [[service-desc# call-desc#] (parse-call-list ~call-list)]
-      (invoke ~ch service-desc# ~service call-desc# ~opts)))
+      (invoke ~ch ~factory service-desc# ~service call-desc# ~opts)))
 
-  ([service call-list opts]
-    `(with-service (chan) ~service ~call-list ~opts)))
+  ([factory service call-list opts]
+    `(with-service (chan) ~factory ~service ~call-list ~opts)))
 
 
 

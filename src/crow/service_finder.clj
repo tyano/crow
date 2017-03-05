@@ -38,7 +38,11 @@
       (doseq [{:keys [address port] :as registrar} current-dead-registrars]
         (try
           (trace-pr "checking: " registrar)
-          (let [msg (some-> (<! (request/send connection-factory address port (ping) nil)) (deref))]
+          (let [send-data #:send-request{:connection-factory connection-factory
+                                         :address address
+                                         :port port
+                                         :data (ping)}
+                msg (some-> (<! (request/send send-data)) (deref))]
             (if (ack? msg)
               (do
                 (info-pr "registrar revived: " registrar)
@@ -159,8 +163,14 @@
    send-retry-count
    send-retry-interval-ms]
 
-  (let [req (ping)
-        read-ch (request/send connection-factory address port req timeout-ms send-retry-count send-retry-interval-ms)
+  (let [send-data #:send-request{:connection-factory connection-factory
+                                 :address address
+                                 :port port
+                                 :data (ping)
+                                 :timeout-ms timeout-ms
+                                 :send-retry-count send-retry-count
+                                 :send-retry-interval-ms send-retry-interval-ms}
+        read-ch   (request/send send-data)
         result-ch (chan)]
     (go
       (let [result (try

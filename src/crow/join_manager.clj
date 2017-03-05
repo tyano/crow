@@ -104,7 +104,14 @@
   [{:keys [connection-factory] :as join-mgr} service {:keys [address port] :as registrar} timeout-ms send-retry-count send-retry-interval-ms]
   (log/debug "Joinning" (pr-str service) "to" (pr-str registrar))
   (let [req (join-request (:address service) (:port service) (service-id service) (:name service) (:attributes service))
-        read-ch (request/send connection-factory address port req timeout-ms send-retry-count send-retry-interval-ms)
+        send-data #:send-request{:connection-factory connection-factory
+                                 :address address
+                                 :port port
+                                 :data req
+                                 :timeout-ms timeout-ms
+                                 :send-retry-count send-retry-count
+                                 :send-retry-interval-ms send-retry-interval-ms}
+        read-ch   (request/send send-data)
         result-ch (chan)]
 
     (go
@@ -138,7 +145,14 @@
 (defn- send-heart-beat!
   [{:keys [connection-factory] :as join-mgr} service {:keys [address port] :as registrar} timeout-ms send-retry-count send-retry-interval-ms]
   (let [req (heart-beat (service-id service))
-        read-ch (request/send connection-factory address port req timeout-ms send-retry-count send-retry-interval-ms)
+        send-data #:send-request{:connection-factory connection-factory
+                                 :address address
+                                 :port port
+                                 :data req
+                                 :timeout-ms timeout-ms
+                                 :send-retry-count send-retry-count
+                                 :send-retry-interval-ms send-retry-interval-ms}
+        read-ch   (request/send send-data)
         result-ch (chan)]
     (go
       (let [result (try
@@ -289,7 +303,14 @@
         (doseq [{:keys [address port] :as registrar} @(:dead-registrars join-mgr)]
           (try
             (let [req (ping)
-                  resp (some-> (<! (request/send connection-factory address port req timeout-ms send-retry-count send-retry-interval-ms)) (deref))]
+                  send-data #:send-request{:connection-factory connection-factory
+                                           :address address
+                                           :port port
+                                           :data req
+                                           :timeout-ms timeout-ms
+                                           :send-retry-count send-retry-count
+                                           :send-retry-interval-ms send-retry-interval-ms}
+                  resp (some-> (<! (request/send send-data)) (deref))]
              (cond
                (ack? resp)
                (do

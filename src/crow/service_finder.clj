@@ -176,6 +176,9 @@
       (let [result (try
                       (let [resp (some-> (<! read-ch) (deref))]
                           (cond
+                            (nil? resp)
+                            false
+
                             (ack? resp)
                             true
 

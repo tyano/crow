@@ -29,6 +29,9 @@
                                             :send-retry-interval-ms send-retry-interval-ms}
                         msg (some-> (<!! (request/send data)) (deref))]
                     (cond
+                      (nil? msg)
+                      nil
+
                       (service-found? msg)
                       (do
                         (trace-pr "service-found: " msg)

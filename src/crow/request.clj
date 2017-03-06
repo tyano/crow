@@ -6,7 +6,7 @@
             [crow.logging :refer [trace-pr]]
             [crow.logging :refer [trace-pr]]
             [slingshot.slingshot :refer [try+ throw+]]
-            [clojure.core.async :refer [<! >! <!! >!! go go-loop alt! alts! thread chan] :as async]
+            [clojure.core.async :refer [<! >! <!! >!! go go-loop alt! alts! thread chan close!] :as async]
             [async-connect.client :refer [connect] :as async-connect]
             [async-connect.box :refer [boxed] :as box]
             [async-connect.spec :as async-spec]
@@ -94,12 +94,13 @@
       (if timeout-ms#
         (alt!
           [ch#]
-          ([v# ~'_] @v#)
+          ([v# ~'_] (when v# @v#))
 
           [(async/timeout timeout-ms#)]
           ([~'_ ~'_] ::timeout))
 
-        @(<! ch#))))
+        (when-let [v# (<! ch#)]
+          @v#))))
 
 
 
@@ -202,29 +203,31 @@
   (let [result-ch (or channel (chan))]
 
     (go
-      (let [{:keys [:client/read-ch] :as conn} (<! (try-send send-data))
-            result (try
-                      (let [msg (read-with-timeout read-ch timeout-ms)]
-                        (case msg
-                          ::timeout
-                          (do
-                            (log/error (str "Timeout: Couldn't receive a response for a data: " (pr-str data)))
-                            (async-connect/close conn true)
-                            ::timeout)
+      (if-let [{:keys [:client/read-ch] :as conn} (<! (try-send send-data))]
+        (let [result (try
+                        (let [msg (read-with-timeout read-ch timeout-ms)]
+                          (case msg
+                            ::timeout
+                            (do
+                              (log/error (str "Timeout: Couldn't receive a response for a data: " (pr-str data)))
+                              (async-connect/close conn true)
+                              ::timeout)
 
-                          nil
-                          (do
-                            (log/error (str "Drained: Peer closed: data: " (pr-str data)))
-                            nil)
+                            nil
+                            (do
+                              (log/error (str "Drained: Peer closed: data: " (pr-str data)))
+                              nil)
 
-                          msg))
+                            msg))
 
-                      (catch Throwable th
-                        (log/error th "send error!")
-                        th)
+                        (catch Throwable th
+                          (log/error th "send error!")
+                          th)
 
-                      (finally
-                        (async-connect/close conn)))]
-        (>! result-ch (boxed result))))
+                        (finally
+                          (async-connect/close conn)))]
+          (>! result-ch (boxed result)))
+
+        (close! result-ch)))
     result-ch))
 

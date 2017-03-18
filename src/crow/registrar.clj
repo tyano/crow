@@ -1,23 +1,25 @@
 (ns crow.registrar
-  (:require [aleph.tcp :refer [start-server] :as tcp]
-            [aleph.netty :as netty]
-            [manifold.deferred :refer [let-flow chain] :as d]
-            [manifold.stream :refer [connect buffer] :as s]
+  (:require [async-connect.server :refer [run-server close-wait]]
+            [async-connect.box :refer [boxed]]
             [clj-time.core :refer [now after? plus millis] :as t]
             [crow.protocol :refer [lease lease-expired registration invalid-message
                                    join-request? heart-beat? discovery? ping?
                                    protocol-error ack call-exception
                                    service-found service-not-found] :as p]
-            [crow.request :refer [frame-decorder wrap-duplex-stream format-stack-trace] :as request]
-            [clojure.core.async :refer [go-loop chan <! onto-chan timeout]]
+            [crow.request :refer [frame-decorder format-stack-trace packer unpacker] :as request]
             [crow.service :as sv]
-            [clojure.tools.logging :as log]
+            [crow.request :refer [write-with-timeout read-with-timeout]]
             [crow.logging :refer [trace-pr debug-pr info-pr]]
-            [byte-streams :refer [to-byte-array]]
+            [clojure.core.async :refer [go-loop chan <! onto-chan timeout]]
+            [clojure.tools.logging :as log]
             [clojure.set :refer [superset?]]
             [crow.utils :refer [extract-exception]]
-            [slingshot.support :refer [get-context]])
-  (:import [java.util UUID])
+            [slingshot.support :refer [get-context]]
+            [clojure.core.async :refer [chan go-loop thread <! >! <!! >!! timeout alt! alts!]])
+  (:import [java.util UUID]
+           [io.netty.handler.codec.bytes
+              ByteArrayDecoder
+              ByteArrayEncoder])
   (:gen-class))
 
 (def ^:const default-renewal-ms 10000)
@@ -52,7 +54,7 @@
 
 
 (defn accept-heartbeat
-  [registrar service-id renewal-ms]
+  [registrar service-id]
   (log/trace "accept-heartbeat:" service-id)
   (let [expire-at (-> (now) (plus (millis (:renewal-ms registrar))))
         services  (swap! (:services registrar)
@@ -129,48 +131,52 @@
 
 
 (defn- handle-request
-  [registrar renewal-ms msg]
-  (cond
-    (ping? msg)         (do (log/trace "received a ping.") (ack))
-    (join-request? msg) (let [{:keys [address port service-id service-name attributes]} msg]
-                          (accept-service-registration registrar address port service-id service-name attributes))
-    (heart-beat? msg)   (accept-heartbeat registrar (:service-id msg) renewal-ms)
-    (discovery? msg)    (accept-discovery registrar (:service-name msg) (:attributes msg))
-    :else               (invalid-message msg)))
+  [registrar msg]
+  (boxed
+    (try
+      (cond
+        (ping? msg)         (do (log/trace "received a ping.") (ack))
+        (join-request? msg) (let [{:keys [address port service-id service-name attributes]} msg]
+                              (accept-service-registration registrar address port service-id service-name attributes))
+        (heart-beat? msg)   (accept-heartbeat registrar (:service-id msg))
+        (discovery? msg)    (accept-discovery registrar (:service-name msg) (:attributes msg))
+        :else               (invalid-message msg))
+      (catch Throwable th th))))
 
-(defn registrar-handler
-  [registrar renewal-ms stream info timeout-ms]
-  (->
-    (d/loop []
-      (-> (s/try-take! stream ::none timeout-ms ::none)
-        (d/chain
-          (fn [msg]
-            (if (= ::none msg)
-              ::none
-              (d/future (handle-request registrar renewal-ms msg))))
-          (fn [msg']
-            (when-not (= ::none msg')
-              (s/try-put! stream msg' timeout-ms ::timeout)))
-          (fn [result]
-            (when (some? result)
-              (cond
-                (= result ::timeout)
-                (log/error "Registrar Timeout: Couldn't write response.")
+(defn- make-registrar-handler
+  [registrar timeout-ms]
+  {:pre [registrar]}
+  (fn [read-ch write-ch]
+    (go-loop []
+      (when-let [msg (<! read-ch)]
+        (when (try
+                (let [result (<! (thread (handle-request registrar @msg)))
+                      resp   {:message @result :flush? true}]
+                  (if timeout-ms
+                    (alt!
+                      [[write-ch resp]]
+                      ([v ch] v)
 
-                (true? result)
-                (d/recur)
+                      [(if timeout-ms (timeout timeout-ms) (chan))]
+                      ([v ch]
+                        (log/error "Registrar Timeout: Couldn't write response.")
+                        false))
+                    (>! write-ch resp)))
+                (catch Throwable ex
+                  (log/error ex "An Error ocurred.")
+                  (let [[type throwable] (extract-exception (get-context ex))
+                        ex-msg (call-exception type (format-stack-trace throwable))]
+                    (alts! [[write-ch {:message ex-msg :flush? true}] (timeout timeout-ms)])
+                    false)))
+          (recur))))))
 
-                :else
-                (log/error "Registrar Error: Couldn't write response.")))))
-        (d/catch
-          (fn [ex]
-            (log/error ex "An Error ocurred.")
-            (let [[type throwable] (extract-exception (get-context ex))]
-              (s/try-put! stream (call-exception type (format-stack-trace throwable)) timeout-ms)
-              nil)))))
-    (d/finally
-      (fn []
-        (s/close! stream)))))
+(defn- channel-initializer
+  [netty-ch config]
+  (.. netty-ch
+    (pipeline)
+    (addLast "messagepack-framedecoder" (frame-decorder))
+    (addLast "bytes-decoder" (ByteArrayDecoder.))
+    (addLast "bytes-encoder" (ByteArrayEncoder.))))
 
 (defn start-registrar-service
   "Starting a registrar and wait requests.
@@ -184,13 +190,13 @@
 
   (let [registrar (new-registrar name renewal-ms watch-interval)]
     (process-registrar registrar)
-    (let [server
-            (tcp/start-server
-              (fn [stream info]
-                (registrar-handler registrar renewal-ms (wrap-duplex-stream stream) info send-recv-timeout))
-              {:port port
-               :pipeline-transform #(.addFirst % "framer" (frame-decorder))})]
-      (log/info (str "#### REGISTRAR SERVICE (name: " (pr-str name) " port: " (netty/port server) ") starts."))
+    (let [server (run-server
+                   {:server.config/port port
+                    :server.config/channel-initializer channel-initializer
+                    :server.config/read-channel-builder #(chan 50 unpacker)
+                    :server.config/write-channel-builder #(chan 50 packer)
+                    :server.config/server-handler (make-registrar-handler registrar send-recv-timeout)})]
+      (log/info (str "#### REGISTRAR SERVICE (name: " (pr-str name) " port: " port ") starts."))
       server)))
 
 
@@ -206,7 +212,5 @@
                               (throw (IllegalArgumentException. (str "Unknown option: " k))))))
           server (start-registrar-service
                     (merge {:port (Long/valueOf port-str), :name name} optmap))]
-      (.. (Runtime/getRuntime) (addShutdownHook (Thread. (fn [] (.close server) (println "SERVER STOPPED.")))))
-      (while true
-        (Thread/sleep 1000)))))
+      (close-wait server #(println "SERVER STOPPED.")))))
 

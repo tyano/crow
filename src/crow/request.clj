@@ -1,19 +1,20 @@
 (ns crow.request
   (:refer-clojure :exclude [send])
-  (:require [aleph.tcp :as tcp]
-            [msgpack.core :as msgpack]
-            [manifold.stream :refer [try-put! try-take! close! take! put!] :as ms]
-            [manifold.deferred :refer [let-flow chain success-deferred error-deferred] :as d]
+  (:require [msgpack.core :as msgpack]
             [msgpack.core :refer [pack unpack refine-ext] :as msgpack]
             [clojure.tools.logging :as log]
             [crow.logging :refer [trace-pr]]
-            [byte-streams :refer [to-byte-array]]
-            [schema.core :as s]
             [crow.logging :refer [trace-pr]]
-            [slingshot.slingshot :refer [try+ throw+]])
+            [slingshot.slingshot :refer [try+ throw+]]
+            [clojure.core.async :refer [<! >! <!! >!! go go-loop alt! alts! thread chan] :as async]
+            [async-connect.client :refer [connect] :as async-connect]
+            [async-connect.box :refer [boxed] :as box])
   (:import [com.shelf.messagepack MessagePackFrameDecoder]
            [msgpack.core Ext]
-           [java.net ConnectException]))
+           [java.net ConnectException]
+           [io.netty.handler.codec.bytes
+              ByteArrayDecoder
+              ByteArrayEncoder]))
 
 
 (defn frame-decorder
@@ -40,131 +41,157 @@
       (refine-ext msg)
       msg)))
 
-(def ConnectionErrorType (s/enum ::drained ::timeout ::connect-failed ::connect-timeout))
-
-;;; type describing connection errors.
-(s/defrecord ConnectionError [type :- ConnectionErrorType])
-
-(def drained (ConnectionError. ::drained))
-(def timeout (ConnectionError. ::timeout))
-(def connect-failed (ConnectionError. ::connect-failed))
-(def connect-timeout (ConnectionError. ::connect-timeout))
-
-
-(defn send!
-  "convert object into bytes and send the bytes into stream.
-  returns a differed object holding true or false."
-  [stream obj timeout-ms]
-  (if timeout-ms
-    (try-put! stream obj timeout-ms timeout)
-    (put! stream obj)))
+(def connection-errors #{::timeout ::connect-failed ::connect-timeout})
+(defn connection-error? [v] (boolean (when v (connection-errors v))))
 
 (defn read-message
   "unpack a byte-array to a message format."
   [data]
-  (case data
-    drained data
-    timeout data
-    (unpack-message data)))
+  (when data (unpack-message data)))
 
-(defn recv!
-  "read from stream and unpack the received bytes.
-  returns a differed object holding an unpacked object."
-  [stream timeout-ms]
-  (if timeout-ms
-    (try-take! stream drained timeout-ms timeout)
-    (take! stream drained)))
+(def packer (map #(update % :message pack)))
+(def unpacker (map #(box/update % read-message)))
 
-(defn wrap-duplex-stream
-  [stream]
-  (let [out (ms/stream)
-        in  (ms/stream)]
-    (ms/connect
-      (ms/map pack out)
-      stream)
-    (ms/connect
-      (ms/map read-message stream)
-      in)
-    (ms/splice out in)))
+(defn- initialize-channel
+  [netty-ch config]
+  (.. netty-ch
+    (pipeline)
+    (addLast "messagepack-framedecoder" (frame-decorder))
+    (addLast "bytes-decoder" (ByteArrayDecoder.))
+    (addLast "bytes-encoder" (ByteArrayEncoder.))))
+
+(def bootstrap
+  (async-connect/make-bootstrap
+    {:client.config/channel-initializer initialize-channel}))
 
 (defn client
-  [address port]
-  (chain (tcp/client {:host address,
-                      :port port,
-                      :pipeline-transform #(.addFirst % "framer" (frame-decorder))})
-    wrap-duplex-stream))
+  [factory address port]
+  (let [read-ch  (chan 500 unpacker)
+        write-ch (chan 500 packer)]
+    (async-connect/connect factory address port read-ch write-ch)))
+
+(defmacro write-with-timeout
+  [write-ch data timeout-ms]
+  `(let [ch# ~write-ch
+         data# ~data
+         timeout-ms# ~timeout-ms]
+    (if timeout-ms#
+      (alt!
+        [[ch# data#]]
+        ([v# ~'_] v#)
+
+        [(async/timeout timeout-ms#)]
+        ([~'_ ~'_] ::timeout))
+
+      (>! ch# data#))))
+
+(defmacro read-with-timeout
+  [read-ch timeout-ms]
+  `(let [ch# ~read-ch
+         timeout-ms# ~timeout-ms]
+      (if timeout-ms#
+        (alt!
+          [ch#]
+          ([v# ~'_] @v#)
+
+          [(async/timeout timeout-ms#)]
+          ([~'_ ~'_] ::timeout))
+
+        @(<! ch#))))
 
 (defn- try-send
-  [address port req timeout-ms send-retry-count send-retry-interval-ms]
+  [connection-factory address port req timeout-ms send-retry-count send-retry-interval-ms]
   (letfn [(retry-send
-            [stream retry-count result]
-            (when stream
-              (close! stream)
-              (log/trace "stream closed."))
+            [conn retry-count result]
+            (when conn
+              (async-connect/close conn true)
+              (log/debug "channel closed."))
             (Thread/sleep (* send-retry-interval-ms retry-count))
             (when (<= retry-count send-retry-count)
               (log/info (format "retry! -- times: %d/%d" retry-count send-retry-count)))
-            (d/recur retry-count result))]
+            {:type :recur :retry-count retry-count :result result})]
 
-    (d/loop [retry 0 result nil]
-      (if (> retry send-retry-count)
-        (cond
-          (instance? ConnectionError result)
-          (throw+ {:type ::connection-error, :kind (:type result)})
+    (let [result-ch (chan)]
+      (go-loop [retry 0 result nil]
+        (if (> retry send-retry-count)
+          (cond
+            (connection-error? result)
+            (throw+ {:type ::connection-error, :kind (:type result)})
 
-          (instance? Throwable result)
-          (throw result)
+            (instance? Throwable result)
+            (throw result)
 
-          :else
-          result)
+            :else
+            (throw+ {:type ::retry-count-over, :last-result result}))
 
-        (-> (let-flow [stream (client address port)]
-              (-> (let-flow [sent (send! stream req timeout-ms)]
-                    (case sent
-                      false
-                      (do
-                        (log/error (str "Couldn't send a message: " (pr-str req)))
-                        (retry-send stream (inc retry) connect-failed))
+          (let [{:keys [:client/write-ch] :as conn} (client connection-factory address port)
+                {:keys [type] :as c}
+                    (try
+                      (case (write-with-timeout write-ch {:message req :flush? true} timeout-ms)
+                        false
+                        (do
+                          (log/error (str "Couldn't send a message: " (pr-str req)))
+                          (retry-send conn (inc retry) ::connect-failed))
 
-                      timeout
-                      (do
-                        (log/error (str "Timeout: Couldn't send a message: " (pr-str req)))
-                        (retry-send stream (inc retry) connect-timeout))
+                        ::timeout
+                        (do
+                          (log/error (str "Timeout: Couldn't send a message: " (pr-str req)))
+                          (retry-send conn (inc retry) ::connect-timeout))
 
-                      stream))
-                  (d/catch ConnectException
-                    (fn [ex]
-                      (retry-send stream (inc retry) ex)))))
-            (d/catch ConnectException
-              (fn [ex]
-                (retry-send nil (inc retry) ex))))))))
+                        {:type :success :result conn})
+
+                      (catch ConnectException ex
+                        (retry-send nil (inc retry) ex)))]
+            (case type
+              :recur
+              (recur (:retry-count c) (:result c))
+
+              :success
+              (>! result-ch (:result c))))))
+      result-ch)))
+
 
 (defn send
-  ([address port req timeout-ms send-retry-count send-retry-interval-ms]
+  ([ch connection-factory address port req timeout-ms send-retry-count send-retry-interval-ms]
     (log/trace "send-recv-timeout:" timeout-ms)
-    (let-flow [stream (try-send address port req timeout-ms send-retry-count send-retry-interval-ms)]
-      (-> (let-flow [msg (recv! stream timeout-ms)]
-            (log/trace "receive!")
-            (case msg
-              timeout
-              (do
-                (log/error (str "Timeout: Couldn't receive a response for a req: " (pr-str req)))
-                timeout)
+    (let [result-ch (or ch (chan))]
 
-              drained
-              (do
-                (log/error (str "Drained: Peer closed: req: " (pr-str req)))
-                drained)
+      (go
+        (let [{:keys [:client/read-ch] :as conn}
+                  (<! (try-send connection-factory address port req timeout-ms send-retry-count send-retry-interval-ms))]
+          (go
+            (let [result (try
+                            (let [msg (read-with-timeout read-ch timeout-ms)]
+                              (case msg
+                                ::timeout
+                                (do
+                                  (log/error (str "Timeout: Couldn't receive a response for a req: " (pr-str req)))
+                                  (async-connect/close conn true)
+                                  ::timeout)
 
-              msg))
-          (d/catch
-            (fn [th]
-              (log/error th "send error!")
-              (throw th)))
-          (d/finally
-            (fn []
-              (log/trace "stream closed.")
-              (close! stream))))))
-  ([address port req timeout-ms]
-    (send address port req timeout-ms 0 0)))
+                                nil
+                                (do
+                                  (log/error (str "Drained: Peer closed: req: " (pr-str req)))
+                                  nil)
+
+                                msg))
+
+                            (catch Throwable th
+                              (log/error th "send error!")
+                              th)
+
+                            (finally
+                              (async-connect/close conn)))]
+              (>! result-ch (boxed result))))))
+
+      result-ch))
+
+  ([connection-factory address port req timeout-ms send-retry-count send-retry-interval-ms]
+    (send nil connection-factory address port req timeout-ms send-retry-count send-retry-interval-ms))
+
+  ([ch connection-factory address port req timeout-ms]
+    (send ch connection-factory address port req timeout-ms 0 0))
+
+  ([connection-factory address port req timeout-ms]
+    (send nil connection-factory address port req timeout-ms)))
 

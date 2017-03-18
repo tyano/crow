@@ -1,4 +1,4 @@
-(defproject crow "1.0-SNAPSHOT"
+(defproject crow "2.0-SNAPSHOT"
   :description "Crow is a library for collaborating with distributed services implemented by Clojure."
   :url "http://example.com/FIXME"
   :license {:name "Eclipse Public License"
@@ -12,7 +12,8 @@
                  [slingshot "0.12.2"]
                  [com.shelf/messagepack-framedecoder "1.0-SNAPSHOT"]
                  [ns-tracker "0.3.0"]
-                 [clj-http "3.4.1"]]
+                 [clj-http "3.4.1"]
+                 [integrant "0.2.2"]]
   :plugins [[lein-midje "3.2"]]
   :repositories {"javelindev-snapshots" "http://javelindev.jp/repository/snapshots"}
   :profiles {:dev {:dependencies [[midje "1.8.3"]

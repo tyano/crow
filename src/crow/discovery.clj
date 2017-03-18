@@ -20,9 +20,18 @@
   (trace-pr "options:" options)
   (let [req     (discovery service-name attributes)
         result  (try
-                  (let [msg (some-> (<!! (request/send connection-factory address port req timeout-ms send-retry-count send-retry-interval-ms))
-                                    (deref))]
+                  (let [data #:send-request{:connection-factory connection-factory
+                                            :address address,
+                                            :port port
+                                            :data req
+                                            :timeout-ms timeout-ms
+                                            :send-retry-count send-retry-count
+                                            :send-retry-interval-ms send-retry-interval-ms}
+                        msg (some-> (<!! (request/send data)) (deref))]
                     (cond
+                      (nil? msg)
+                      nil
+
                       (service-found? msg)
                       (do
                         (trace-pr "service-found: " msg)

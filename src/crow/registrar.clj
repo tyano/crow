@@ -15,8 +15,12 @@
             [clojure.set :refer [superset?]]
             [crow.utils :refer [extract-exception]]
             [slingshot.support :refer [get-context]]
-            [clojure.core.async :refer [chan go-loop thread <! >! <!! >!! timeout alt! alts!]])
+            [clojure.core.async :refer [chan go-loop thread <! >! <!! >!! timeout alt! alts!]]
+            [clojure.spec.test :refer [instrument]])
   (:import [java.util UUID]
+           [io.netty.channel
+              ChannelPipeline
+              ChannelHandler]
            [io.netty.handler.codec.bytes
               ByteArrayDecoder
               ByteArrayEncoder])
@@ -172,11 +176,25 @@
 
 (defn- channel-initializer
   [netty-ch config]
-  (.. netty-ch
-    (pipeline)
-    (addLast "messagepack-framedecoder" (frame-decorder))
-    (addLast "bytes-decoder" (ByteArrayDecoder.))
-    (addLast "bytes-encoder" (ByteArrayEncoder.))))
+  (try
+    ;; This function may be called on a instance repeatedly by spec-checking.
+    ;; so this function must be idempotent.
+    (let [pipeline ^ChannelPipeline (.pipeline netty-ch)]
+      (doseq [^String n (.names pipeline)]
+        (when-let [handler (.context pipeline n)]
+          (.remove pipeline ^String n))))
+
+    (.. netty-ch
+      (pipeline)
+      (addLast "messagepack-framedecoder" (frame-decorder))
+      (addLast "bytes-decoder" (ByteArrayDecoder.))
+      (addLast "bytes-encoder" (ByteArrayEncoder.)))
+
+    netty-ch
+
+    (catch Throwable th
+      (log/error th "init error")
+      (throw th))))
 
 (defn start-registrar-service
   "Starting a registrar and wait requests.
@@ -209,7 +227,11 @@
                             (case k
                               "-r" [:renewal-ms (Long/valueOf v)]
                               "-w" [:watch-interval (Long/valueOf v)]
+                              "-m" [:mode v]
                               (throw (IllegalArgumentException. (str "Unknown option: " k))))))
+          _      (when (and (:mode optmap) (= (:mode optmap) "development"))
+                    (log/info "[SPEC] instrument")
+                    (instrument))
           server (start-registrar-service
                     (merge {:port (Long/valueOf port-str), :name name} optmap))]
       (close-wait server #(println "SERVER STOPPED.")))))

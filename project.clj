@@ -13,7 +13,8 @@
                  [com.shelf/messagepack-framedecoder "1.0-SNAPSHOT"]
                  [ns-tracker "0.3.0"]
                  [clj-http "3.4.1"]
-                 [integrant "0.2.2"]]
+                 [integrant "0.2.2"]
+                 [org.clojure/test.check "0.9.0"]]
   :plugins [[lein-midje "3.2"]]
   :repositories {"javelindev-snapshots" "http://javelindev.jp/repository/snapshots"}
   :profiles {:dev {:dependencies [[midje "1.8.3"]

@@ -14,10 +14,14 @@
             [slingshot.support :refer [get-context]]
             [async-connect.pool :refer [pooled-connection-factory]]
             [crow.request :as request]
-            [clojure.string :refer [index-of]])
+            [clojure.string :refer [index-of]]
+            [clojure.spec.test :refer [with-instrument-disabled]])
   (:import [io.netty.handler.codec.bytes
               ByteArrayDecoder
-              ByteArrayEncoder]))
+              ByteArrayEncoder]
+           [io.netty.channel
+              ChannelPipeline
+              ChannelHandler]))
 
 
 ;; SERVICE INTERFACES
@@ -160,11 +164,25 @@
 
 (defn- channel-initializer
   [netty-ch config]
-  (.. netty-ch
-    (pipeline)
-    (addLast "messagepack-framedecoder" (frame-decorder))
-    (addLast "bytes-decoder" (ByteArrayDecoder.))
-    (addLast "bytes-encoder" (ByteArrayEncoder.))))
+  (try
+    ;; This function may be called on a instance repeatedly by spec-checking.
+    ;; so this function must be idempotent.
+    (let [pipeline ^ChannelPipeline (.pipeline netty-ch)]
+      (doseq [^String n (.names pipeline)]
+        (when-let [handler (.context pipeline n)]
+          (.remove pipeline ^String n))))
+
+    (.. netty-ch
+      (pipeline)
+      (addLast "messagepack-framedecoder" (frame-decorder))
+      (addLast "bytes-decoder" (ByteArrayDecoder.))
+      (addLast "bytes-encoder" (ByteArrayEncoder.)))
+
+    netty-ch
+
+    (catch Throwable th
+      (log/error th "init error")
+      (throw th))))
 
 (defn start-service
   [{:keys [:service/address

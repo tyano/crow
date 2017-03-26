@@ -124,7 +124,7 @@
   :args (s/cat :ch :async/channel
                :finder :crow/service-finder
                :service-desc :crow/service-descriptor
-               :call-desc :crow/call-desc
+               :call-desc :crow/call-descriptor
                :options :crow/discovery-options)
   :ret  :async/channel)
 

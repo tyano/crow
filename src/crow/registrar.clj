@@ -1,5 +1,5 @@
 (ns crow.registrar
-  (:require [async-connect.server :refer [run-server close-wait]]
+  (:require [async-connect.server :refer [run-server close-wait] :as async-server]
             [async-connect.box :refer [boxed]]
             [clj-time.core :refer [now after? plus millis] :as t]
             [crow.protocol :refer [lease lease-expired registration invalid-message
@@ -203,18 +203,21 @@
   :port a waiting port number.
   :renewal-ms  milliseconds for make each registered services expired. Services must send a 'lease' request before the expiration.
   :watch-internal  milliseconds for checking each service is expired or not."
-  [{:keys [port name renewal-ms watch-interval send-recv-timeout]
+  [{:keys [address port name renewal-ms watch-interval send-recv-timeout]
     :or {port 4000, renewal-ms default-renewal-ms, watch-interval default-watch-interval send-recv-timeout nil}}]
 
   (let [registrar (new-registrar name renewal-ms watch-interval)]
     (process-registrar registrar)
     (let [server (run-server
-                   {:server.config/port port
+                   {:server.config/address address
+                    :server.config/port port
                     :server.config/channel-initializer channel-initializer
                     :server.config/read-channel-builder #(chan 50 unpacker)
                     :server.config/write-channel-builder #(chan 50 packer)
-                    :server.config/server-handler (make-registrar-handler registrar send-recv-timeout)})]
-      (log/info (str "#### REGISTRAR SERVICE (name: " (pr-str name) " port: " port ") starts."))
+                    :server.config/server-handler-factory
+                        (fn [host port]
+                          (make-registrar-handler registrar send-recv-timeout))})]
+      (log/info (str "#### REGISTRAR SERVICE (name: " (pr-str name) " port: " (async-server/port server) ") starts."))
       server)))
 
 

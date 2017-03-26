@@ -3,25 +3,25 @@
   :url "http://example.com/FIXME"
   :license {:name "Eclipse Public License"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
-  :dependencies [[org.clojure/clojure "1.9.0-alpha14"]
+  :dependencies [[org.clojure/clojure "1.9.0-alpha15"]
                  [async-connect "0.1.0-SNAPSHOT"]
                  [clojure-msgpack "1.2.0"]
-                 [clj-time "0.12.0"]
-                 [org.clojure/core.async "0.2.391"]
+                 [clj-time "0.13.0"]
+                 [org.clojure/core.async "0.3.442"]
                  [org.clojure/tools.logging "0.3.1"]
                  [slingshot "0.12.2"]
                  [com.shelf/messagepack-framedecoder "1.0-SNAPSHOT"]
-                 [ns-tracker "0.3.0"]
+                 [ns-tracker "0.3.1"]
                  [clj-http "3.4.1"]
-                 [integrant "0.2.2"]
+                 [integrant "0.3.0"]
                  [org.clojure/test.check "0.9.0"]]
   :plugins [[lein-midje "3.2"]]
   :repositories {"javelindev-snapshots" "http://javelindev.jp/repository/snapshots"}
-  :profiles {:dev {:dependencies [[midje "1.8.3"]
-                                  [ch.qos.logback/logback-classic "1.1.7"]]
+  :profiles {:dev {:dependencies [[midje "1.9.0-alpha6"]
+                                  [ch.qos.logback/logback-classic "1.2.2"]]
                    :resource-paths ["resources-dev"]
                    :jvm-opts ["-Djava.net.preferIPv4Stack=true"]}
-             :uberjar {:dependencies [[ch.qos.logback/logback-classic "1.1.7"]]
+             :uberjar {:dependencies [[ch.qos.logback/logback-classic "1.2.2"]]
                        :resource-paths ["resources-release"]
                        :aot :all
                        :jvm-opts ["-Dclojure.compiler.direct-linking=true"]}}

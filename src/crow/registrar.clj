@@ -16,7 +16,8 @@
             [crow.utils :refer [extract-exception]]
             [slingshot.support :refer [get-context]]
             [clojure.core.async :refer [chan go-loop thread <! >! <!! >!! timeout alt! alts!]]
-            [clojure.spec.test :refer [instrument]])
+            [clojure.spec.test :refer [instrument instrumentable-syms]]
+            [clojure.string :as string])
   (:import [java.util UUID]
            [io.netty.channel
               ChannelPipeline
@@ -234,7 +235,9 @@
                               (throw (IllegalArgumentException. (str "Unknown option: " k))))))
           _      (when (and (:mode optmap) (= (:mode optmap) "development"))
                     (log/info "[SPEC] instrument")
-                    (instrument))
+                    (let [targets (->> (instrumentable-syms)
+                                       (filter #(string/starts-with? (namespace %) "crow.")))]
+                      (instrument targets)))
           server (start-registrar-service
                     (merge {:port (Long/valueOf port-str), :name name} optmap))]
       (close-wait server #(println "SERVER STOPPED.")))))

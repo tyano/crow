@@ -45,7 +45,7 @@
                             stack-trace (:stack-trace msg)]
                         (throw+ {:type (keyword type-str), :stack-trace stack-trace}))
 
-                      (identical? :crow.request/timeout msg)
+                      (= :crow.request/timeout msg)
                       nil
 
                       :else

@@ -121,7 +121,7 @@
                           (registration? msg)
                           (join! join-mgr service registrar msg)
 
-                          (identical? :crow.request/timeout msg)
+                          (= :crow.request/timeout msg)
                           (do
                             (trace-pr msg)
                             (throw+ {:type msg
@@ -170,7 +170,7 @@
                             (service-expired! join-mgr service registrar)
                             false)
 
-                          (identical? :crow.request/timeout)
+                          (= :crow.request/timeout)
                           (do
                             (trace-pr msg)
                             (throw+ {:type msg

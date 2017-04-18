@@ -85,7 +85,7 @@
                       (call-result? msg)
                       (:obj msg)
 
-                      (identical? :crow.request/timeout msg)
+                      (= :crow.request/timeout msg)
                       msg
 
                       :else
@@ -241,7 +241,7 @@
 
 (defn- timeout?
   [msg]
-  (boolean (when msg (identical? msg :crow.request/timeout))))
+  (boolean (when msg (= msg :crow.request/timeout))))
 
 (defn- connection-error?
   [msg]

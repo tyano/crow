@@ -5,7 +5,7 @@
             [crow.request :as request]
             [crow.registrar-source :as source]
             [clojure.tools.logging :as log]
-            [crow.logging :refer [trace-pr info-pr]]
+            [crow.logging :refer [trace-pr debug-pr info-pr]]
             [async-connect.box :refer [boxed]]
             [clojure.spec :as s]
             [async-connect.client]))
@@ -153,7 +153,7 @@
     [finder service-desc]
     (when service-desc
       (let [services (get @service-map service-desc)]
-        (trace-pr "find-services - service-desc : found-services: " [service-desc services])
+        (debug-pr "find-services - service-desc : found-services: " [service-desc services])
         services))))
 
 (defn- send-ping

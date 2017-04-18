@@ -152,41 +152,53 @@
 
     (let [result-ch (chan)]
       (go-loop [retry 0 result nil]
-        (if (> retry send-retry-count)
-          (cond
-            (connection-error? result)
-            (throw+ {:type ::connection-error, :kind (:type result)})
+        (let [recur-result
+                (try
+                  (if (> retry send-retry-count)
+                    (cond
+                      (connection-error? result)
+                      (throw+ {:type ::connection-error, :kind (:type result)})
 
-            (instance? Throwable result)
-            (throw result)
+                      (instance? Throwable result)
+                      (throw result)
 
-            :else
-            (throw+ {:type ::retry-count-over, :last-result result}))
+                      :else
+                      (throw+ {:type ::retry-count-over, :last-result result}))
 
-          (let [{:keys [:client/write-ch] :as conn} (client connection-factory address port)
-                {:keys [type] :as c}
-                    (try
-                      (case (write-with-timeout write-ch {:message data :flush? true} timeout-ms)
-                        false
-                        (do
-                          (log/error (str "Couldn't send a message: " (pr-str data)))
-                          (retry-send conn (inc retry) ::connect-failed))
+                    (let [{:keys [:client/write-ch] :as conn} (client connection-factory address port)
+                          {:keys [type] :as c}
+                              (try
+                                (case (write-with-timeout write-ch {:message data :flush? true} timeout-ms)
+                                  false
+                                  (do
+                                    (log/error (str "Couldn't send a message: " (pr-str data)))
+                                    (retry-send conn (inc retry) ::connect-failed))
 
-                        ::timeout
-                        (do
-                          (log/error (str "Timeout: Couldn't send a message: " (pr-str data)))
-                          (retry-send conn (inc retry) ::connect-timeout))
+                                  ::timeout
+                                  (do
+                                    (log/error (str "Timeout: Couldn't send a message: " (pr-str data)))
+                                    (retry-send conn (inc retry) ::connect-timeout))
 
-                        {:type :success :result conn})
+                                  {:type :success :result conn})
 
-                      (catch ConnectException ex
-                        (retry-send nil (inc retry) ex)))]
-            (case type
-              :recur
-              (recur (:retry-count c) (:result c))
+                                (catch ConnectException ex
+                                  (log/error ex "Can not send data. an exception occurred.")
+                                  (retry-send nil (inc retry) ex)))]
+                      (case type
+                        :recur
+                        {:type :recur
+                         :retry-count (:retry-count c)
+                         :result (:result c)}
 
-              :success
-              (>! result-ch (:result c))))))
+                        :success
+                        (>! result-ch (boxed (:result c))))))
+
+                  (catch Throwable th
+                    (>! result-ch (boxed th))))]
+
+          (when-let [{:keys [retry-count result]} recur-result]
+            (recur retry-count result))))
+
       result-ch)))
 
 
@@ -203,31 +215,34 @@
   (let [result-ch (or channel (chan))]
 
     (go
-      (if-let [{:keys [:client/read-ch] :as conn} (<! (try-send send-data))]
-        (let [result (try
-                        (let [msg (read-with-timeout read-ch timeout-ms)]
-                          (case msg
-                            ::timeout
-                            (do
-                              (log/error (str "Timeout: Couldn't receive a response for a data: " (pr-str data)))
-                              (async-connect/close conn true)
-                              ::timeout)
+      (try
+        (if-let [{:keys [:client/read-ch] :as conn} @(<! (try-send send-data))]
+          (let [result (try
+                          (let [msg (read-with-timeout read-ch timeout-ms)]
+                            (case msg
+                              ::timeout
+                              (do
+                                (log/error (str "Timeout: Couldn't receive a response for a data: " (pr-str data)))
+                                (async-connect/close conn true)
+                                ::timeout)
 
-                            nil
-                            (do
-                              (log/error (str "Drained: Peer closed: data: " (pr-str data)))
-                              nil)
+                              nil
+                              (do
+                                (log/error (str "Drained: Peer closed: data: " (pr-str data)))
+                                nil)
 
-                            msg))
+                              msg))
 
-                        (catch Throwable th
-                          (log/error th "send error!")
-                          th)
+                          (catch Throwable th
+                            (log/error th "send error!")
+                            th)
 
-                        (finally
-                          (async-connect/close conn)))]
-          (>! result-ch (boxed result)))
+                          (finally
+                            (async-connect/close conn)))]
+            (>! result-ch (boxed result)))
 
-        (close! result-ch)))
+          (close! result-ch))
+        (catch Throwable th
+          (>! result-ch (boxed th)))))
     result-ch))
 

@@ -16,7 +16,7 @@
             [crow.utils :refer [extract-exception]]
             [slingshot.support :refer [get-context]]
             [clojure.core.async :refer [chan go-loop thread <! >! <!! >!! timeout alt! alts!]]
-            [clojure.spec.test :refer [instrument instrumentable-syms]]
+            [clojure.spec.test.alpha :refer [instrument instrumentable-syms]]
             [clojure.string :as string])
   (:import [java.util UUID]
            [io.netty.channel

@@ -10,7 +10,7 @@
             [async-connect.client :refer [connect] :as async-connect]
             [async-connect.box :refer [boxed] :as box]
             [async-connect.spec :as async-spec]
-            [clojure.spec :as s])
+            [clojure.spec.alpha :as s])
   (:import [com.shelf.messagepack MessagePackFrameDecoder]
            [msgpack.core Ext]
            [java.net ConnectException]

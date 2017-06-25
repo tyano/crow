@@ -9,7 +9,7 @@
             [crow.logging :refer [debug-pr]]
             [clojure.tools.logging :as log]
             [slingshot.slingshot :refer [try+ throw+]]
-            [clojure.spec :as s])
+            [clojure.spec.alpha :as s])
   (:import [java.net ConnectException]))
 
 (s/def :async/channel (s/and #(satisfies? ReadPort %) #(satisfies? WritePort %)))

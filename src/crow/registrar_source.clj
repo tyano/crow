@@ -1,7 +1,7 @@
 (ns crow.registrar-source
   (:require [clojure.string :refer [split]]
             [clj-http.client :as http]
-            [clojure.spec :as s])
+            [clojure.spec.alpha :as s])
   (:import [java.io BufferedReader StringReader]))
 
 

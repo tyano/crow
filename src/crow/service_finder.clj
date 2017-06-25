@@ -7,7 +7,7 @@
             [clojure.tools.logging :as log]
             [crow.logging :refer [trace-pr debug-pr info-pr]]
             [async-connect.box :refer [boxed]]
-            [clojure.spec :as s]
+            [clojure.spec.alpha :as s]
             [async-connect.client]))
 
 (s/def :service-finder/dead-registrar-check-interval-ms pos-int?)

@@ -2,7 +2,7 @@
   (:require [crow.protocol :refer [remote-call call-result? call-exception? protocol-error?]]
             [crow.request :as request]
             [crow.boxed :refer [box unbox service-info]]
-            [clojure.core.async :refer [>!! chan <!! <! close! go]]
+            [clojure.core.async :refer [chan <!! >! <! close! go]]
             [clojure.core.async.impl.protocols :refer [ReadPort WritePort]]
             [crow.discovery :refer [discover]]
             [crow.service-finder :refer [standard-service-finder] :as finder]
@@ -62,6 +62,7 @@
    {:keys [timeout-ms send-retry-count send-retry-interval-ms]
       :or {send-retry-count 3, send-retry-interval-ms 500}}]
 
+  (log/trace "invoke")
   (let [data (remote-call target-ns fn-name fn-args)]
     (go
       (try
@@ -90,9 +91,9 @@
 
                       :else
                       (throw (IllegalStateException. (str "No such message format: " (pr-str msg)))))]
-          (>!! ch (box resp)))
+          (>! ch (box resp)))
         (catch Throwable th
-          (>!! ch (box service-desc service th)))))
+          (>! ch (box service-desc service th)))))
     ch))
 
 

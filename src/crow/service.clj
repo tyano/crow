@@ -199,7 +199,7 @@
            :join-manager/registrar-source]
       :or {port 0
            attributes {}
-           send-recv-timeout nil
+           send-recv-timeout 2000
            send-retry-count 3
            send-retry-interval-ms 500}
       :as config}

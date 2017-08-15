@@ -130,7 +130,7 @@
 
 (defn- make-service-handler
   [handler-map service timeout-ms & [{:keys [:crow/middleware]}]]
-  (fn [read-ch write-ch]
+  (fn [context read-ch write-ch]
     (go-loop []
       (when-let [msg (<! read-ch)]
         (when

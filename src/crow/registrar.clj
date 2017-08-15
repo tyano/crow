@@ -151,7 +151,7 @@
 (defn- make-registrar-handler
   [registrar timeout-ms]
   {:pre [registrar]}
-  (fn [read-ch write-ch]
+  (fn [context read-ch write-ch]
     (go-loop []
       (when-let [msg (<! read-ch)]
         (when (try

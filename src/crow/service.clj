@@ -217,17 +217,16 @@
                                      send-retry-count
                                      send-retry-interval-ms)
         server (run-server
-                  {:server.config/address address
-                   :server.config/port port
-                   :server.config/channel-initializer channel-initializer
-                   :server.config/read-channel-builder #(chan 50 unpacker)
-                   :server.config/write-channel-builder #(chan 50 packer)
-                   :server.config/server-handler-factory
-                      (fn [host port]
-                        (let [service (service-fn host port)
-                              service-handler (make-service-handler handler-map service send-recv-timeout config)]
-                          (join join-mgr service)
-                          service-handler))})]
+                 {:server.config/address                address
+                  :server.config/port                   port
+                  :server.config/channel-initializer    channel-initializer
+                  :server.config/read-channel-builder   (fn [ch] (chan 50 unpacker))
+                  :server.config/write-channel-builder  (fn [ch] (chan 50 packer))
+                  :server.config/server-handler-factory (fn [host port]
+                                                          (let [service (service-fn host port)
+                                                                service-handler (make-service-handler handler-map service send-recv-timeout config)]
+                                                            (join join-mgr service)
+                                                            service-handler))})]
     (log/info (str "#### SERVICE (name: " name ", port: " (async-server/port server) ") starts."))
     server))
 

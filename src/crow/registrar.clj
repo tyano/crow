@@ -210,14 +210,13 @@
   (let [registrar (new-registrar name renewal-ms watch-interval)]
     (process-registrar registrar)
     (let [server (run-server
-                   {:server.config/address address
-                    :server.config/port port
-                    :server.config/channel-initializer channel-initializer
-                    :server.config/read-channel-builder #(chan 50 unpacker)
-                    :server.config/write-channel-builder #(chan 50 packer)
-                    :server.config/server-handler-factory
-                        (fn [host port]
-                          (make-registrar-handler registrar send-recv-timeout))})]
+                   {:server.config/address                address
+                    :server.config/port                   port
+                    :server.config/channel-initializer    channel-initializer
+                    :server.config/read-channel-builder   (fn [ch] (chan 50 unpacker))
+                    :server.config/write-channel-builder  (fn [ch] (chan 50 packer))
+                    :server.config/server-handler-factory (fn [host port]
+                                                            (make-registrar-handler registrar send-recv-timeout))})]
       (log/info (str "#### REGISTRAR SERVICE (name: " (pr-str name) " port: " (async-server/port server) ") starts."))
       server)))
 

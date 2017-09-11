@@ -74,7 +74,7 @@
 (defn- accept-lease!
   [join-mgr service {:keys [address port] :as registrar} expire-at]
   (dosync
-    (alter (:registrars service)
+    (commute (:registrars service)
       #(-> (remove-registrar registrar %)
            (conj {:address address, :port port, :expire-at expire-at})))))
 
@@ -82,7 +82,7 @@
   [join-mgr service {:keys [address port] :as registrar} sid expire-at]
   (dosync
     (ref-set (:service-id-ref service) sid) ;storing a new service id from message. this action must be done at first.
-    (alter (:registrars service)
+    (commute (:registrars service)
       #(-> (remove-registrar registrar %)
            (conj {:address address, :port port, :expire-at expire-at})))))
 
@@ -90,15 +90,15 @@
   [join-mgr service {:keys [address port]}]
   (let [registrar {:address address, :port port}]
     (dosync
-      (alter (:registrars service) (remove-registrar-fn registrar)))))
+      (commute (:registrars service) (remove-registrar-fn registrar)))))
 
 (defn- registrar-died!
   [join-mgr service {:keys [address port]}]
   (let [registrar {:address address, :port port}]
     (dosync
-      (alter (:registrars join-mgr) disj registrar)
-      (alter (:dead-registrars join-mgr) conj registrar)
-      (alter (:registrars service) (remove-registrar-fn registrar)))))
+      (commute (:registrars join-mgr) disj registrar)
+      (commute (:dead-registrars join-mgr) conj registrar)
+      (commute (:registrars service) (remove-registrar-fn registrar)))))
 
 (defn- reset-registrars!
   [join-mgr registrars]
@@ -108,8 +108,8 @@
 (defn- registrar-revived!
   [join-mgr registrar]
   (dosync
-    (alter (:dead-registrars join-mgr) disj registrar)
-    (alter (:registrars join-mgr) conj registrar)))
+    (commute (:dead-registrars join-mgr) disj registrar)
+    (commute (:registrars join-mgr) conj registrar)))
 
 (defn- join!
   [join-mgr service registrar msg]
@@ -163,8 +163,7 @@
                                      :message msg
                                      :info (error-info registrar service)}))))
                       (catch Throwable e
-                        (dosync
-                          (registrar-died! join-mgr service registrar))
+                        (registrar-died! join-mgr service registrar)
                         e))]
         (>! result-ch (boxed result))))
     result-ch))
@@ -251,18 +250,19 @@
       (do
         (try
           (when-let [service (<! service-ch)]
-            (let [[joined-registrars registrars] (dosync [@(:registrars service) @(:registrars join-mgr)])
-                  joined      (map #(dissoc % :expire-at) joined-registrars)
-                  not-joined  (difference registrars joined)]
-              (try
-                (if (seq not-joined)
-                  (let [join-req (for [reg not-joined] {:service service, :registrar reg})]
-                    (trace-pr "join targets:" not-joined)
-                    (onto-chan join-ch join-req false))
-                  (log/trace "There are no join targets!"))
-                (finally
-                  (dosync
-                    (alter (:managed-services join-mgr) conj service))))))
+            (dosync
+              (let [joined-registrars @(:registrars service)
+                    registrars        @(:registrars join-mgr)
+                    joined            (map #(dissoc % :expire-at) joined-registrars)
+                    not-joined        (difference registrars joined)]
+                (try
+                  (if (seq not-joined)
+                    (let [join-req (for [reg not-joined] {:service service, :registrar reg})]
+                      (trace-pr "join targets:" not-joined)
+                      (onto-chan join-ch join-req false))
+                    (log/trace "There are no join targets!"))
+                  (finally
+                    (commute (:managed-services join-mgr) conj service))))))
           (catch Throwable e
             (log/error e "service-acceptor error.")))
         (recur)))))

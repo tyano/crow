@@ -27,10 +27,10 @@
 ;;; If 'ack' is returned, remove the registrar from dead-registrars ref and
 ;;; add it into active-registrars.
 (defn- start-check-dead-registrars-task
-  [{:keys [:service-finder/connection-factory
-           :service-finder/dead-registrar-check-interval-ms
-           :service-finder/dead-registrars
-           :service-finder/active-registrars]
+  [{:service-finder/keys [connection-factory
+                          dead-registrar-check-interval-ms
+                          dead-registrars
+                          active-registrars]
       :or {dead-registrar-check-interval-ms 30000}
       :as finder}]
   (go-loop []
@@ -66,20 +66,20 @@
     returns a initialized service-finder."
   [finder registrar-source]
   {:pre [registrar-source (s/valid? (s/keys :req [:service-finder/connection-factory]) finder)]}
-  (let [finder (assoc finder
-                  :service-finder/dead-registrar-check-interval-ms 30000
-                  :service-finder/registrar-source registrar-source
-                  :service-finder/active-registrars (ref #{})
-                  :service-finder/dead-registrars   (ref #{}))]
+  (let [finder (merge finder
+                  #:service-finder{:dead-registrar-check-interval-ms 30000
+                                   :registrar-source  registrar-source
+                                   :active-registrars (ref #{})
+                                   :dead-registrars   (ref #{})})]
     (start-check-dead-registrars-task finder)
     finder))
 
 ;; COMMON FUNCTIONS FOR SERVICE FINDER
 
 (defn reset-registrars!
-  [{:keys [:service-finder/registrar-source
-           :service-finder/dead-registrars
-           :service-finder/active-registrars]}]
+  [{:service-finder/keys [registrar-source
+                          dead-registrars
+                          active-registrars]}]
   (let [new-registrars (source/registrars registrar-source)]
     (dosync
       (alter active-registrars
@@ -87,9 +87,7 @@
           (difference (set new-registrars) @dead-registrars))))))
 
 (defn abandon-registrar!
-  [{:keys [:service-finder/dead-registrars
-           :service-finder/active-registrars]}
-   reg]
+  [{:service-finder/keys [dead-registrars active-registrars]} reg]
   (dosync
     (let [other-reg (first (shuffle (alter active-registrars disj reg)))]
       (alter dead-registrars conj reg)
@@ -100,7 +98,7 @@
 (defn standard-service-finder
   [connection-factory registrar-source]
   {:pre [registrar-source]}
-  (-> {:service-finder/connection-factory connection-factory}
+  (-> #:service-finder{:connection-factory connection-factory}
       (init-service-finder registrar-source)))
 
 
@@ -157,7 +155,7 @@
         services))))
 
 (defn- send-ping
-  [{:keys [:service-finder/connection-factory] :as finder}
+  [{:service-finder/keys [connection-factory] :as finder}
    {:keys [address port] :as service}
    timeout-ms
    send-retry-count

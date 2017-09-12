@@ -58,9 +58,7 @@
     result))
 
 (defn discover
-  [{:keys [:service-finder/active-registrars
-           :service-finder/registrar-source]
-      :as finder}
+  [{:service-finder/keys [active-registrars registrar-source] :as finder}
    {:keys [service-name attributes] :as service-desc}
    options]
   ;; find services from a cache if finder has a cache.

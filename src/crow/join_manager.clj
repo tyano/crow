@@ -103,7 +103,8 @@
 (defn- reset-registrars!
   [join-mgr registrars]
   (dosync
-    (alter (:registrars join-mgr) (fn [_] (difference (set registrars) @(:dead-registrars join-mgr))))))
+    (let [dead-registrars @(:dead-registrars join-mgr)]
+      (commute (:registrars join-mgr) (fn [_] (difference (set registrars) dead-registrars))))))
 
 (defn- registrar-revived!
   [join-mgr registrar]
@@ -250,19 +251,17 @@
       (do
         (try
           (when-let [service (<! service-ch)]
-            (dosync
-              (let [joined-registrars @(:registrars service)
-                    registrars        @(:registrars join-mgr)
-                    joined            (map #(dissoc % :expire-at) joined-registrars)
-                    not-joined        (difference registrars joined)]
-                (try
-                  (if (seq not-joined)
-                    (let [join-req (for [reg not-joined] {:service service, :registrar reg})]
-                      (trace-pr "join targets:" not-joined)
-                      (onto-chan join-ch join-req false))
-                    (log/trace "There are no join targets!"))
-                  (finally
-                    (commute (:managed-services join-mgr) conj service))))))
+            (let [[joined-registrars registrars] (dosync (vector @(:registrars service) @(:registrars join-mgr)))
+                  joined (map #(dissoc % :expire-at) joined-registrars)
+                  not-joined (difference registrars joined)]
+              (try
+                (if (seq not-joined)
+                  (let [join-req (for [reg not-joined] {:service service, :registrar reg})]
+                    (trace-pr "join targets:" not-joined)
+                    (onto-chan join-ch join-req false))
+                  (log/trace "There are no join targets!"))
+                (finally
+                  (dosync (commute (:managed-services join-mgr) conj service))))))
           (catch Throwable e
             (log/error e "service-acceptor error.")))
         (recur)))))

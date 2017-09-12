@@ -47,8 +47,8 @@
               (do
                 (info-pr "registrar revived: " registrar)
                 (dosync
-                  (alter dead-registrars disj registrar)
-                  (alter active-registrars conj registrar)))
+                  (commute dead-registrars disj registrar)
+                  (commute active-registrars conj registrar)))
               (log/error (str "Invalid response:" msg))))
           (catch Throwable e
             (log/debug e))))
@@ -82,7 +82,7 @@
            :service-finder/active-registrars]}]
   (let [new-registrars (source/registrars registrar-source)]
     (dosync
-      (alter active-registrars
+      (commute active-registrars
         (fn [_]
           (difference (set new-registrars) @dead-registrars))))))
 
@@ -91,8 +91,8 @@
            :service-finder/active-registrars]}
    reg]
   (dosync
-    (let [other-reg (first (shuffle (alter active-registrars disj reg)))]
-      (alter dead-registrars conj reg)
+    (let [other-reg (first (shuffle (commute active-registrars disj reg)))]
+      (commute dead-registrars conj reg)
       other-reg)))
 
 

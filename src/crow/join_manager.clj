@@ -163,8 +163,7 @@
                                      :message msg
                                      :info (error-info registrar service)}))))
                       (catch Throwable e
-                        (dosync
-                          (registrar-died! join-mgr service registrar))
+                        (registrar-died! join-mgr service registrar)
                         e))]
         (>! result-ch (boxed result))))
     result-ch))

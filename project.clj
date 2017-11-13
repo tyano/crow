@@ -3,7 +3,7 @@
   :url "http://example.com/FIXME"
   :license {:name "Eclipse Public License"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
-  :dependencies [[org.clojure/clojure "1.9.0-beta3"]
+  :dependencies [[org.clojure/clojure "1.9.0-RC1"]
                  [async-connect "0.1.0-SNAPSHOT"]
                  [clojure-msgpack "1.2.1"]
                  [clj-time "0.14.0"]
@@ -16,7 +16,6 @@
                  [integrant "0.6.1"]
                  [org.clojure/test.check "0.9.0"]]
   :plugins [[lein-midje "3.2"]]
-  :repositories {"javelindev-snapshots" "http://javelindev.jp/repository/snapshots"}
   :profiles {:dev {:dependencies [[midje "1.9.0-alpha6"]
                                   [ch.qos.logback/logback-classic "1.2.3"]]
                    :resource-paths ["resources-dev"]

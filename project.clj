@@ -15,7 +15,6 @@
                  [clj-http "3.4.1"]
                  [integrant "0.2.2"]]
   :plugins [[lein-midje "3.2"]]
-  :repositories {"javelindev-snapshots" "http://javelindev.jp/repository/snapshots"}
   :profiles {:dev {:dependencies [[midje "1.8.3"]
                                   [ch.qos.logback/logback-classic "1.1.7"]]
                    :resource-paths ["resources-dev"]

@@ -8,12 +8,12 @@
             [crow.logging :refer [trace-pr debug-pr info-pr]]
             [async-connect.box :refer [boxed]]
             [clojure.spec.alpha :as s]
-            [async-connect.client]))
+            [async-connect.client :as client]))
 
 (s/def :service-finder/dead-registrar-check-interval-ms pos-int?)
 (s/def :service-finder/active-registrars #(instance? clojure.lang.Ref %))
 (s/def :service-finder/dead-registrars #(instance? clojure.lang.Ref %))
-(s/def :service-finder/connection-factory :async-connect.client/connection-factory)
+(s/def :service-finder/connection-factory ::client/connection-factory)
 (s/def :service-finder/registrar-source :crow/registrar-source)
 (s/def :crow/service-finder
   (s/keys :req [:service-finder/connection-factory

@@ -1,5 +1,6 @@
 (ns crow.remote
-  (:require [crow.protocol :refer [remote-call call-result? call-exception? protocol-error?]]
+  (:require [async-connect.client :as client]
+            [crow.protocol :refer [remote-call call-result? call-exception? protocol-error?]]
             [crow.request :as request]
             [crow.boxed :refer [box unbox service-info]]
             [clojure.core.async :refer [chan <!! >! <! close! go]]
@@ -46,7 +47,7 @@
 
 (s/fdef invoke
   :args (s/cat :ch :async/channel
-               :factory :async-connect.client/connection-factory
+               :factory ::client/connection-factory
                :service-desc :crow/service-descriptor
                :service :crow/service
                :call-desc :crow/call-descriptor

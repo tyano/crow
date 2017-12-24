@@ -1,5 +1,5 @@
 (ns crow.registrar
-  (:require [async-connect.server :refer [run-server close-wait]]
+  (:require [async-connect.server :refer [run-server close-wait] :as async-server]
             [async-connect.box :refer [boxed]]
             [clj-time.core :refer [now after? plus millis] :as t]
             [crow.protocol :refer [lease lease-expired registration invalid-message
@@ -15,8 +15,13 @@
             [clojure.set :refer [superset?]]
             [crow.utils :refer [extract-exception]]
             [slingshot.support :refer [get-context]]
-            [clojure.core.async :refer [chan go-loop thread <! >! <!! >!! timeout alt! alts!]])
+            [clojure.core.async :refer [chan go-loop thread <! >! <!! >!! timeout alt! alts!]]
+            [clojure.spec.test.alpha :refer [instrument instrumentable-syms]]
+            [clojure.string :as string])
   (:import [java.util UUID]
+           [io.netty.channel
+              ChannelPipeline
+              ChannelHandler]
            [io.netty.handler.codec.bytes
               ByteArrayDecoder
               ByteArrayEncoder])
@@ -146,7 +151,7 @@
 (defn- make-registrar-handler
   [registrar timeout-ms]
   {:pre [registrar]}
-  (fn [read-ch write-ch]
+  (fn [context read-ch write-ch]
     (go-loop []
       (when-let [msg (<! read-ch)]
         (when (try
@@ -172,11 +177,25 @@
 
 (defn- channel-initializer
   [netty-ch config]
-  (.. netty-ch
-    (pipeline)
-    (addLast "messagepack-framedecoder" (frame-decorder))
-    (addLast "bytes-decoder" (ByteArrayDecoder.))
-    (addLast "bytes-encoder" (ByteArrayEncoder.))))
+  (try
+    ;; This function may be called on a instance repeatedly by spec-checking.
+    ;; so this function must be idempotent.
+    (let [pipeline ^ChannelPipeline (.pipeline netty-ch)]
+      (doseq [^String n (.names pipeline)]
+        (when-let [handler (.context pipeline n)]
+          (.remove pipeline ^String n))))
+
+    (.. netty-ch
+      (pipeline)
+      (addLast "messagepack-framedecoder" (frame-decorder))
+      (addLast "bytes-decoder" (ByteArrayDecoder.))
+      (addLast "bytes-encoder" (ByteArrayEncoder.)))
+
+    netty-ch
+
+    (catch Throwable th
+      (log/error th "init error")
+      (throw th))))
 
 (defn start-registrar-service
   "Starting a registrar and wait requests.
@@ -185,18 +204,20 @@
   :port a waiting port number.
   :renewal-ms  milliseconds for make each registered services expired. Services must send a 'lease' request before the expiration.
   :watch-internal  milliseconds for checking each service is expired or not."
-  [{:keys [port name renewal-ms watch-interval send-recv-timeout]
+  [{:keys [address port name renewal-ms watch-interval send-recv-timeout]
     :or {port 4000, renewal-ms default-renewal-ms, watch-interval default-watch-interval send-recv-timeout nil}}]
 
   (let [registrar (new-registrar name renewal-ms watch-interval)]
     (process-registrar registrar)
     (let [server (run-server
-                   {:server.config/port port
-                    :server.config/channel-initializer channel-initializer
-                    :server.config/read-channel-builder #(chan 50 unpacker)
-                    :server.config/write-channel-builder #(chan 50 packer)
-                    :server.config/server-handler (make-registrar-handler registrar send-recv-timeout)})]
-      (log/info (str "#### REGISTRAR SERVICE (name: " (pr-str name) " port: " port ") starts."))
+                   {:server.config/address                address
+                    :server.config/port                   port
+                    :server.config/channel-initializer    channel-initializer
+                    :server.config/read-channel-builder   (fn [ch] (chan 50 unpacker))
+                    :server.config/write-channel-builder  (fn [ch] (chan 50 packer))
+                    :server.config/server-handler-factory (fn [host port]
+                                                            (make-registrar-handler registrar send-recv-timeout))})]
+      (log/info (str "#### REGISTRAR SERVICE (name: " (pr-str name) " port: " (async-server/port server) ") starts."))
       server)))
 
 
@@ -209,7 +230,13 @@
                             (case k
                               "-r" [:renewal-ms (Long/valueOf v)]
                               "-w" [:watch-interval (Long/valueOf v)]
+                              "-m" [:mode v]
                               (throw (IllegalArgumentException. (str "Unknown option: " k))))))
+          _      (when (and (:mode optmap) (= (:mode optmap) "development"))
+                    (log/info "[SPEC] instrument")
+                    (let [targets (->> (instrumentable-syms)
+                                       (filter #(string/starts-with? (namespace %) "crow.")))]
+                      (instrument targets)))
           server (start-registrar-service
                     (merge {:port (Long/valueOf port-str), :name name} optmap))]
       (close-wait server #(println "SERVER STOPPED.")))))

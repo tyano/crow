@@ -16,7 +16,7 @@
   [{:keys [:service-finder/connection-factory] :as finder}
    {:keys [address port] :as registrar}
    {:keys [service-name attributes] :as service-desc}
-   {:keys [timeout-ms send-retry-count send-retry-interval-ms] :or {timeout-ms Long/MAX_VALUE send-retry-count 3 send-retry-interval-ms (long 500)} :as options}]
+   {:keys [timeout-ms send-retry-count send-retry-interval-ms] :or {send-retry-count 3 send-retry-interval-ms (long 500)} :as options}]
   (trace-pr "options:" options)
   (let [req     (discovery service-name attributes)
         result  (try
@@ -45,7 +45,7 @@
                             stack-trace (:stack-trace msg)]
                         (throw+ {:type (keyword type-str), :stack-trace stack-trace}))
 
-                      (identical? :crow.request/timeout msg)
+                      (= :crow.request/timeout msg)
                       nil
 
                       :else
@@ -58,9 +58,7 @@
     result))
 
 (defn discover
-  [{:keys [:service-finder/active-registrars
-           :service-finder/registrar-source]
-      :as finder}
+  [{:service-finder/keys [active-registrars registrar-source] :as finder}
    {:keys [service-name attributes] :as service-desc}
    options]
   ;; find services from a cache if finder has a cache.

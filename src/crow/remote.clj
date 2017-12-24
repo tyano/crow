@@ -2,14 +2,14 @@
   (:require [crow.protocol :refer [remote-call call-result? call-exception? protocol-error?]]
             [crow.request :as request]
             [crow.boxed :refer [box unbox service-info]]
-            [clojure.core.async :refer [>!! chan <!! <! close! go]]
+            [clojure.core.async :refer [chan <!! >! <! close! go]]
             [clojure.core.async.impl.protocols :refer [ReadPort WritePort]]
             [crow.discovery :refer [discover]]
             [crow.service-finder :refer [standard-service-finder] :as finder]
             [crow.logging :refer [debug-pr]]
             [clojure.tools.logging :as log]
             [slingshot.slingshot :refer [try+ throw+]]
-            [clojure.spec :as s])
+            [clojure.spec.alpha :as s])
   (:import [java.net ConnectException]))
 
 (s/def :async/channel (s/and #(satisfies? ReadPort %) #(satisfies? WritePort %)))
@@ -62,6 +62,7 @@
    {:keys [timeout-ms send-retry-count send-retry-interval-ms]
       :or {send-retry-count 3, send-retry-interval-ms 500}}]
 
+  (log/trace "invoke")
   (let [data (remote-call target-ns fn-name fn-args)]
     (go
       (try
@@ -85,14 +86,14 @@
                       (call-result? msg)
                       (:obj msg)
 
-                      (identical? :crow.request/timeout msg)
+                      (= :crow.request/timeout msg)
                       msg
 
                       :else
                       (throw (IllegalStateException. (str "No such message format: " (pr-str msg)))))]
-          (>!! ch (box resp)))
+          (>! ch (box resp)))
         (catch Throwable th
-          (>!! ch (box service-desc service th)))))
+          (>! ch (box service-desc service th)))))
     ch))
 
 
@@ -124,7 +125,7 @@
   :args (s/cat :ch :async/channel
                :finder :crow/service-finder
                :service-desc :crow/service-descriptor
-               :call-desc :crow/call-desc
+               :call-desc :crow/call-descriptor
                :options :crow/discovery-options)
   :ret  :async/channel)
 
@@ -241,7 +242,7 @@
 
 (defn- timeout?
   [msg]
-  (boolean (when msg (identical? msg :crow.request/timeout))))
+  (boolean (when msg (= msg :crow.request/timeout))))
 
 (defn- connection-error?
   [msg]

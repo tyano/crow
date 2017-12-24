@@ -10,7 +10,12 @@
             [clojure.tools.logging :as log]
             [clj-time.core :refer [now plus after? millis] :as t]
             [crow.logging :refer [trace-pr debug-pr]]
-            [async-connect.box :refer [boxed]]))
+            [async-connect.box :refer [boxed]])
+  (:import [java.net
+            InetAddress
+            Inet4Address
+            Inet6Address
+            NetworkInterface]))
 
 (def should-stop (atom false))
 
@@ -23,6 +28,30 @@
 (defn- service-id
   [service]
   (deref (:service-id-ref service)))
+
+(defn sort-addresses
+  [addresses]
+  (sort-by #(cond (instance? Inet4Address %) 0
+                  (instance? Inet6Address %) 1
+                  :else 2)
+           addresses))
+
+(defn- find-one-public-address
+  []
+  (or
+    (->> (enumeration-seq (NetworkInterface/getNetworkInterfaces))
+         (filter #(not (.isLoopback %)))
+         (mapcat #(enumeration-seq (.getInetAddresses %)))
+         (sort-addresses)
+         (first))
+    (->> (enumeration-seq (NetworkInterface/getNetworkInterfaces))
+         (filter #(.isLoopback %))
+         (first))))
+
+(defn service-address
+  [service]
+  (or (:address service)
+      (some-> (find-one-public-address) (.getHostAddress))))
 
 (defn- same-service?
   [s1 s2]
@@ -103,7 +132,7 @@
   "send a join request to a registrar and get a new service-id"
   [{:keys [connection-factory] :as join-mgr} service {:keys [address port] :as registrar} timeout-ms send-retry-count send-retry-interval-ms]
   (log/debug "Joinning" (pr-str service) "to" (pr-str registrar))
-  (let [req (join-request (:address service) (:port service) (service-id service) (:name service) (:attributes service))
+  (let [req (join-request (service-address service) (:port service) (service-id service) (:name service) (:attributes service))
         send-data #:send-request{:connection-factory connection-factory
                                  :address address
                                  :port port
@@ -121,7 +150,7 @@
                           (registration? msg)
                           (join! join-mgr service registrar msg)
 
-                          (identical? :crow.request/timeout msg)
+                          (= :crow.request/timeout msg)
                           (do
                             (trace-pr msg)
                             (throw+ {:type msg
@@ -134,8 +163,7 @@
                                      :message msg
                                      :info (error-info registrar service)}))))
                       (catch Throwable e
-                        (dosync
-                          (registrar-died! join-mgr service registrar))
+                        (registrar-died! join-mgr service registrar)
                         e))]
         (>! result-ch (boxed result))))
     result-ch))
@@ -170,7 +198,7 @@
                             (service-expired! join-mgr service registrar)
                             false)
 
-                          (identical? :crow.request/timeout)
+                          (= :crow.request/timeout)
                           (do
                             (trace-pr msg)
                             (throw+ {:type msg

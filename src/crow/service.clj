@@ -1,5 +1,5 @@
 (ns crow.service
-  (:require [async-connect.server :refer [run-server close-wait]]
+  (:require [async-connect.server :refer [run-server close-wait] :as async-server]
             [async-connect.box :refer [boxed]]
             [clojure.core.async :refer [chan go-loop thread <! >! <!! >!! alt! alts! timeout]]
             [crow.protocol :refer [remote-call? ping? invalid-message protocol-error call-result call-exception ack] :as p]
@@ -17,7 +17,10 @@
             [clojure.string :refer [index-of]])
   (:import [io.netty.handler.codec.bytes
               ByteArrayDecoder
-              ByteArrayEncoder]))
+              ByteArrayEncoder]
+           [io.netty.channel
+              ChannelPipeline
+              ChannelHandler]))
 
 
 ;; SERVICE INTERFACES
@@ -127,7 +130,7 @@
 
 (defn- make-service-handler
   [handler-map service timeout-ms & [{:keys [:crow/middleware]}]]
-  (fn [read-ch write-ch]
+  (fn [context read-ch write-ch]
     (go-loop []
       (when-let [msg (<! read-ch)]
         (when
@@ -138,7 +141,7 @@
                                     (if middleware
                                       (let [wrapper-fn (middleware (partial handle-request handler-map service))]
                                         (wrapper-fn @msg))
-                                      (handle-request service @msg))
+                                      (handle-request handler-map service @msg))
                                     (catch Throwable th th)))))
                   resp   {:message @result, :flush? true}]
                 (alt!
@@ -157,14 +160,27 @@
                 false)))
           (recur))))))
 
-
 (defn- channel-initializer
   [netty-ch config]
-  (.. netty-ch
-    (pipeline)
-    (addLast "messagepack-framedecoder" (frame-decorder))
-    (addLast "bytes-decoder" (ByteArrayDecoder.))
-    (addLast "bytes-encoder" (ByteArrayEncoder.))))
+  (try
+    ;; This function may be called on a instance repeatedly by spec-checking.
+    ;; so this function must be idempotent.
+    (let [pipeline ^ChannelPipeline (.pipeline netty-ch)]
+      (doseq [^String n (.names pipeline)]
+        (when-let [handler (.context pipeline n)]
+          (.remove pipeline ^String n))))
+
+    (.. netty-ch
+      (pipeline)
+      (addLast "messagepack-framedecoder" (frame-decorder))
+      (addLast "bytes-decoder" (ByteArrayDecoder.))
+      (addLast "bytes-encoder" (ByteArrayEncoder.)))
+
+    netty-ch
+
+    (catch Throwable th
+      (log/error th "init error")
+      (throw th))))
 
 (defn start-service
   [{:keys [:service/address
@@ -181,22 +197,16 @@
            :join-manager/send-retry-interval-ms
            :join-manager/connection-factory
            :join-manager/registrar-source]
-      :or {address "localhost"
+      :or {port 0
            attributes {}
-           send-recv-timeout nil
+           send-recv-timeout 2000
            send-retry-count 3
            send-retry-interval-ms 500}
       :as config}
    handler-map]
   {:pre [port (not (clojure.string/blank? name)) id-store registrar-source fetch-registrar-interval-ms heart-beat-buffer-ms]}
   (let [sid     (id/read id-store)
-        service (new-service address port sid name attributes id-store)
-        server  (run-server
-                  {:server.config/port port
-                   :server.config/channel-initializer channel-initializer
-                   :server.config/read-channel-builder #(chan 50 unpacker)
-                   :server.config/write-channel-builder #(chan 50 packer)
-                   :server.config/server-handler (make-service-handler handler-map service send-recv-timeout config)})
+        service-fn (fn [address port] (new-service address port sid name attributes id-store))
         join-mgr (start-join-manager connection-factory
                                      registrar-source
                                      fetch-registrar-interval-ms
@@ -205,8 +215,18 @@
                                      rejoin-interval-ms
                                      send-recv-timeout
                                      send-retry-count
-                                     send-retry-interval-ms)]
-    (join join-mgr service)
-    (log/info (str "#### SERVICE (name: " name ", port: " port ") starts."))
+                                     send-retry-interval-ms)
+        server (run-server
+                 {:server.config/address                address
+                  :server.config/port                   port
+                  :server.config/channel-initializer    channel-initializer
+                  :server.config/read-channel-builder   (fn [ch] (chan 50 unpacker))
+                  :server.config/write-channel-builder  (fn [ch] (chan 50 packer))
+                  :server.config/server-handler-factory (fn [host port]
+                                                          (let [service (service-fn host port)
+                                                                service-handler (make-service-handler handler-map service send-recv-timeout config)]
+                                                            (join join-mgr service)
+                                                            service-handler))})]
+    (log/info (str "#### SERVICE (name: " name ", port: " (async-server/port server) ") starts."))
     server))
 

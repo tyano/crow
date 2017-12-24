@@ -3,11 +3,11 @@
             [crow.protocol :refer [remote-call call-result? call-exception? protocol-error?]]
             [crow.request :as request]
             [crow.boxed :refer [box unbox service-info]]
-            [clojure.core.async :refer [chan <!! >! <! close! go]]
-            [clojure.core.async.impl.protocols :refer [ReadPort WritePort]]
             [crow.discovery :refer [discover]]
             [crow.service-finder :refer [standard-service-finder] :as finder]
             [crow.logging :refer [debug-pr]]
+            [clojure.core.async :refer [chan <!! >! <! close! go]]
+            [clojure.core.async.impl.protocols :refer [ReadPort WritePort]]
             [clojure.tools.logging :as log]
             [slingshot.slingshot :refer [try+ throw+]]
             [clojure.spec.alpha :as s])
@@ -99,7 +99,7 @@
 
 
 (s/fdef find-services
-  :args (s/cat :finder ::service-finder
+  :args (s/cat :finder :crow/service-finder
                :service-desc ::service-descriptor
                :options ::discovery-options)
   :ret  (s/coll-of ::service))
@@ -112,7 +112,7 @@
 
 
 (s/fdef find-service
-  :args (s/cat :finder ::service-finder
+  :args (s/cat :finder :crow/service-finder
                :service-desc ::service-descriptor
                :options ::discovery-options)
   :ret  ::service)
@@ -124,7 +124,7 @@
 
 (s/fdef async-fn
   :args (s/cat :ch :async/channel
-               :finder ::service-finder
+               :finder :crow/service-finder
                :service-desc ::service-descriptor
                :call-desc ::call-descriptor
                :options ::discovery-options)
@@ -223,7 +223,7 @@
 
 (s/fdef make-call-fn
   :args (s/cat :ch :async/channel
-               :finder ::service-finder
+               :finder :crow/service-finder
                :service-desc ::service-descriptor
                :call-desc ::call-descriptor
                :options ::discovery-options)
@@ -263,7 +263,7 @@
 
 (s/fdef try-call
   :args (s/cat :ch :async/channel
-               :finder ::service-finder
+               :finder :crow/service-finder
                :service-desc ::service-descriptor
                :call-desc ::call-descriptor
                :call-opts ::discovery-options)

@@ -15,43 +15,43 @@
 
 (s/def :async/channel (s/and #(satisfies? ReadPort %) #(satisfies? WritePort %)))
 
-(s/def :crow/service-name string?)
-(s/def :crow/attributes (s/nilable (s/map-of keyword? any?)))
-(s/def :crow/service-descriptor
-  (s/keys :req-un [:crow/service-name :crow/attributes]))
+(s/def ::service-name string?)
+(s/def ::attributes (s/nilable (s/map-of keyword? any?)))
+(s/def ::service-descriptor
+  (s/keys :req-un [::service-name ::attributes]))
 
-(s/def :crow/target-ns string?)
-(s/def :crow/fn-name string?)
-(s/def :crow/fn-args (s/nilable (s/coll-of any?)))
-(s/def :crow/call-descriptor
-  (s/keys :req-un [:crow/target-ns
-                   :crow/fn-name
-                   :crow/fn-args]))
+(s/def ::target-ns string?)
+(s/def ::fn-name string?)
+(s/def ::fn-args (s/nilable (s/coll-of any?)))
+(s/def ::call-descriptor
+  (s/keys :req-un [::target-ns
+                   ::fn-name
+                   ::fn-args]))
 
-(s/def :crow/timeout-ms pos-int?)
-(s/def :crow/send-retry-count pos-int?)
-(s/def :crow/send-retry-interval-ms pos-int?)
-(s/def :crow/remote-call-retry-count pos-int?)
-(s/def :crow/remote-call-retry-interval-ms pos-int?)
-(s/def :crow/discovery-options
-  (s/keys :opt-un [:crow/timeout-ms
-                   :crow/send-retry-count
-                   :crow/send-retry-interval-ms
-                   :crow/remote-call-retry-count
-                   :crow/remote-call-retry-interval-ms]))
+(s/def ::timeout-ms pos-int?)
+(s/def ::send-retry-count pos-int?)
+(s/def ::send-retry-interval-ms pos-int?)
+(s/def ::remote-call-retry-count pos-int?)
+(s/def ::remote-call-retry-interval-ms pos-int?)
+(s/def ::discovery-options
+  (s/keys :opt-un [::timeout-ms
+                   ::send-retry-count
+                   ::send-retry-interval-ms
+                   ::remote-call-retry-count
+                   ::remote-call-retry-interval-ms]))
 
-(s/def :crow/address string?)
-(s/def :crow/port pos-int?)
-(s/def :crow/service
-  (s/keys :req-un [:crow/address, :crow/port]))
+(s/def ::address string?)
+(s/def ::port pos-int?)
+(s/def ::service
+  (s/keys :req-un [::address, ::port]))
 
 (s/fdef invoke
   :args (s/cat :ch :async/channel
                :factory ::client/connection-factory
-               :service-desc :crow/service-descriptor
-               :service :crow/service
-               :call-desc :crow/call-descriptor
-               :discovery-opts :crow/discovery-options)
+               :service-desc ::service-descriptor
+               :service ::service
+               :call-desc ::call-descriptor
+               :discovery-opts ::discovery-options)
   :ret  :async/channel)
 
 (defn invoke
@@ -67,13 +67,13 @@
   (let [data (remote-call target-ns fn-name fn-args)]
     (go
       (try
-        (let [send-data #:send-request{:connection-factory factory
-                                       :address address
-                                       :port port
-                                       :data data
-                                       :timeout-ms timeout-ms
-                                       :send-retry-count send-retry-count
-                                       :send-retry-interval-ms send-retry-interval-ms}
+        (let [send-data #::request{:connection-factory factory
+                                   :address address
+                                   :port port
+                                   :data data
+                                   :timeout-ms timeout-ms
+                                   :send-retry-count send-retry-count
+                                   :send-retry-interval-ms send-retry-interval-ms}
               msg  (some-> (<! (request/send send-data)) (deref))
               resp (cond
                       (protocol-error? msg)
@@ -87,7 +87,7 @@
                       (call-result? msg)
                       (:obj msg)
 
-                      (= :crow.request/timeout msg)
+                      (= ::request/timeout msg)
                       msg
 
                       :else
@@ -99,10 +99,10 @@
 
 
 (s/fdef find-services
-  :args (s/cat :finder :crow/service-finder
-               :service-desc :crow/service-descriptor
-               :options :crow/discovery-options)
-  :ret  (s/coll-of :crow/service))
+  :args (s/cat :finder ::service-finder
+               :service-desc ::service-descriptor
+               :options ::discovery-options)
+  :ret  (s/coll-of ::service))
 
 (defn find-services
   [finder service-desc options]
@@ -112,10 +112,10 @@
 
 
 (s/fdef find-service
-  :args (s/cat :finder :crow/service-finder
-               :service-desc :crow/service-descriptor
-               :options :crow/discovery-options)
-  :ret  :crow/service)
+  :args (s/cat :finder ::service-finder
+               :service-desc ::service-descriptor
+               :options ::discovery-options)
+  :ret  ::service)
 
 (defn find-service
   [finder service-desc options]
@@ -124,16 +124,15 @@
 
 (s/fdef async-fn
   :args (s/cat :ch :async/channel
-               :finder :crow/service-finder
-               :service-desc :crow/service-descriptor
-               :call-desc :crow/call-descriptor
-               :options :crow/discovery-options)
+               :finder ::service-finder
+               :service-desc ::service-descriptor
+               :call-desc ::call-descriptor
+               :options ::discovery-options)
   :ret  :async/channel)
 
 (defn async-fn
   [ch
-   {:keys [:service-finder/connection-factory]
-      :as finder}
+   {::finder/keys [connection-factory] :as finder}
    service-desc
    call-desc
    options]
@@ -224,10 +223,10 @@
 
 (s/fdef make-call-fn
   :args (s/cat :ch :async/channel
-               :finder :crow/service-finder
-               :service-desc :crow/service-descriptor
-               :call-desc :crow/call-descriptor
-               :options :crow/discovery-options)
+               :finder ::service-finder
+               :service-desc ::service-descriptor
+               :call-desc ::call-descriptor
+               :options ::discovery-options)
   :ret  (s/fspec :args empty? :ret any?))
 
 (defn- make-call-fn
@@ -264,10 +263,10 @@
 
 (s/fdef try-call
   :args (s/cat :ch :async/channel
-               :finder :crow/service-finder
-               :service-desc :crow/service-descriptor
-               :call-desc :crow/call-descriptor
-               :call-opts :crow/discovery-options)
+               :finder ::service-finder
+               :service-desc ::service-descriptor
+               :call-desc ::call-descriptor
+               :call-opts ::discovery-options)
   :ret  any?)
 
 (defn try-call

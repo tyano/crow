@@ -183,20 +183,16 @@
       (throw th))))
 
 (defn start-service
-  [{:keys [:service/address
-           :service/port
-           :service/name
-           :service/attributes
-           :service/id-store
-           :join-manager/fetch-registrar-interval-ms
-           :join-manager/heart-beat-buffer-ms
-           :join-manager/dead-registrar-check-interval
-           :join-manager/rejoin-interval-ms
-           :join-manager/send-recv-timeout
-           :join-manager/send-retry-count
-           :join-manager/send-retry-interval-ms
-           :join-manager/connection-factory
-           :join-manager/registrar-source]
+  [{:service/keys [address port name attributes id-store]
+    :join-manager/keys [fetch-registrar-interval-ms
+                        heart-beat-buffer-ms
+                        dead-registrar-check-interval
+                        rejoin-interval-ms
+                        send-recv-timeout
+                        send-retry-count
+                        send-retry-interval-ms
+                        connection-factory
+                        registrar-source]
       :or {port 0
            attributes {}
            send-recv-timeout 2000
@@ -217,16 +213,16 @@
                                      send-retry-count
                                      send-retry-interval-ms)
         server (run-server
-                 {:server.config/address                address
-                  :server.config/port                   port
-                  :server.config/channel-initializer    channel-initializer
-                  :server.config/read-channel-builder   (fn [ch] (chan 50 unpacker))
-                  :server.config/write-channel-builder  (fn [ch] (chan 50 packer))
-                  :server.config/server-handler-factory (fn [host port]
-                                                          (let [service (service-fn host port)
-                                                                service-handler (make-service-handler handler-map service send-recv-timeout config)]
-                                                            (join join-mgr service)
-                                                            service-handler))})]
+                 #::async-server{:address                address
+                                 :port                   port
+                                 :channel-initializer    channel-initializer
+                                 :read-channel-builder   (fn [ch] (chan 50 unpacker))
+                                 :write-channel-builder  (fn [ch] (chan 50 packer))
+                                 :server-handler-factory (fn [host port]
+                                                            (let [service (service-fn host port)
+                                                                  service-handler (make-service-handler handler-map service send-recv-timeout config)]
+                                                              (join join-mgr service)
+                                                              service-handler))})]
     (log/info (str "#### SERVICE (name: " name ", port: " (async-server/port server) ") starts."))
     server))
 

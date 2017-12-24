@@ -64,7 +64,7 @@
 
 (def bootstrap
   (async-connect/make-bootstrap
-    {:client.config/channel-initializer initialize-channel}))
+    {::async-connect/channel-initializer initialize-channel}))
 
 (defn client
   [factory address port]
@@ -104,38 +104,38 @@
 
 
 
-(s/def :send-request/channel (s/nilable ::async-spec/async-channel))
-(s/def :send-request/connection-factory ::async-connect/connection-factory)
-(s/def :send-request/address string?)
-(s/def :send-request/port pos-int?)
-(s/def :send-request/req any?)
-(s/def :send-request/timeout-ms (s/nilable pos-int?))
-(s/def :send-request/send-retry-count (s/nilable #(or (zero? %) (pos-int? %))))
-(s/def :send-request/send-retry-interval-ms (s/nilable #(or (zero? %) (pos-int? %))))
+(s/def ::channel (s/nilable ::async-spec/async-channel))
+(s/def ::connection-factory ::async-connect/connection-factory)
+(s/def ::address string?)
+(s/def ::port pos-int?)
+(s/def ::req any?)
+(s/def ::timeout-ms (s/nilable pos-int?))
+(s/def ::send-retry-count (s/nilable #(or (zero? %) (pos-int? %))))
+(s/def ::send-retry-interval-ms (s/nilable #(or (zero? %) (pos-int? %))))
 
-(s/def :send-request/request
+(s/def :crow/request
   (s/keys
-    :req [:send-request/connection-factory
-          :send-request/address
-          :send-request/port
-          :send-request/data]
-    :opt [:send-request/channel
-          :send-request/timeout-ms
-          :send-request/send-retry-count
-          :send-request/send-retry-interval-ms]))
+    :req [::connection-factory
+          ::address
+          ::port
+          ::data]
+    :opt [::channel
+          ::timeout-ms
+          ::send-retry-count
+          ::send-retry-interval-ms]))
 
 (s/fdef try-send
-  :args (s/cat :request :send-request/request)
+  :args (s/cat :request :crow/request)
   :ret  ::async-spec/async-channel)
 
 (defn- try-send
-  [{:keys [:send-request/connection-factory
-           :send-request/address
-           :send-request/port
-           :send-request/data
-           :send-request/timeout-ms
-           :send-request/send-retry-count
-           :send-request/send-retry-interval-ms]
+  [{:keys [::connection-factory
+           ::address
+           ::port
+           ::data
+           ::timeout-ms
+           ::send-retry-count
+           ::send-retry-interval-ms]
     :or {send-retry-count 0
          send-retry-interval-ms 0}
     :as send-data}]
@@ -165,7 +165,7 @@
                       :else
                       (throw+ {:type ::retry-count-over, :last-result result}))
 
-                    (let [{:keys [:client/write-ch] :as conn} (client connection-factory address port)
+                    (let [{::async-connect/keys [write-ch] :as conn} (client connection-factory address port)
                           {:keys [type] :as c}
                               (try
                                 (case (write-with-timeout write-ch {:message data :flush? true} timeout-ms)
@@ -204,11 +204,11 @@
 
 
 (s/fdef send
-  :args (s/cat :request :send-request/request)
+  :args (s/cat :request :crow/request)
   :ret  ::async-spec/async-channel)
 
 (defn send
-  [{:keys [:send-request/channel :send-request/data :send-request/timeout-ms]
+  [{:keys [::channel ::data ::timeout-ms]
     :as send-data}]
 
   (log/trace "send-recv-timeout:" timeout-ms)
@@ -216,7 +216,7 @@
 
     (go
       (try
-        (if-let [{:keys [:client/read-ch] :as conn} @(<! (try-send send-data))]
+        (if-let [{::async-connect/keys [read-ch] :as conn} @(<! (try-send send-data))]
           (let [result (try
                           (let [msg (read-with-timeout read-ch timeout-ms)]
                             (case msg

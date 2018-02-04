@@ -16,6 +16,12 @@
                  [integrant "0.6.1"]
                  [org.clojure/test.check "0.9.0"]]
   :plugins [[lein-midje "3.2"]]
+  :repositories [["Shelf Public Release Repository" {:url "https://shelf-maven-repo.s3-ap-northeast-1.amazonaws.com/release"
+                                                     :snapshots false
+                                                     :update :never}]
+                 ["Shelf Public Snapshot Repository" {:url "https://shelf-maven-repo.s3-ap-northeast-1.amazonaws.com/snapshot"
+                                                      :snapshots true
+                                                      :update :always}]]
   :profiles {:dev {:dependencies [[midje "1.9.0-alpha6"]
                                   [ch.qos.logback/logback-classic "1.2.3"]]
                    :resource-paths ["resources-dev"]
@@ -32,6 +38,3 @@
         crow.remote]
   :main crow.registrar)
 
-(cemerick.pomegranate.aether/register-wagon-factory!
-   "scp" #(let [c (resolve 'org.apache.maven.wagon.providers.ssh.external.ScpExternalWagon)]
-                      (clojure.lang.Reflector/invokeConstructor c (into-array []))))

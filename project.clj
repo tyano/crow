@@ -22,6 +22,8 @@
                  ["Shelf Public Snapshot Repository" {:url "https://shelf-maven-repo.s3-ap-northeast-1.amazonaws.com/snapshot"
                                                       :snapshots true
                                                       :update :always}]]
+  :deploy-repositories [["releases" :clojars]
+                        ["snapshots" :clojars]]
   :profiles {:dev {:dependencies [[midje "1.9.0-alpha6"]
                                   [ch.qos.logback/logback-classic "1.2.3"]]
                    :resource-paths ["resources-dev"]

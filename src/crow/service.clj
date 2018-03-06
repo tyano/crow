@@ -4,7 +4,7 @@
             [clojure.core.async :refer [chan go-loop thread <! >! <!! >!! alt! alts! timeout]]
             [crow.protocol :refer [remote-call? ping? invalid-message protocol-error call-result call-exception ack] :as p]
             [crow.request :refer [frame-decorder format-stack-trace packer unpacker] :as request]
-            [crow.join-manager :refer [start-join-manager join]]
+            [crow.join-manager :refer [start-join-manager stop-join-manager join]]
             [clojure.tools.logging :as log]
             [crow.logging :refer [trace-pr]]
             [crow.registrar-source :refer [static-registrar-source]]
@@ -222,7 +222,10 @@
                                                             (let [service (service-fn host port)
                                                                   service-handler (make-service-handler handler-map service send-recv-timeout config)]
                                                               (join join-mgr service)
-                                                              service-handler))})]
+                                                              service-handler))
+                                 :shutdown-hook          (fn [{:keys [host port]}]
+                                                           (stop-join-manager join-mgr)
+                                                           (log/info (str "#### SERVICE (name: " name ", port: " port  ") stopped.")))})]
     (log/info (str "#### SERVICE (name: " name ", port: " (async-server/port server) ") starts."))
     server))
 

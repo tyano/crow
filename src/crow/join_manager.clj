@@ -4,7 +4,7 @@
             [crow.registrar-source :as source]
             [crow.request :as request]
             [crow.id-store :refer [write]]
-            [clojure.core.async :refer [chan go-loop <! >! timeout <!! >!! onto-chan go] :as async]
+            [clojure.core.async :refer [chan close! go-loop <! >! timeout <!! >!! onto-chan go] :as async]
             [clojure.set :refer [difference select] :as st]
             [slingshot.slingshot :refer [throw+]]
             [clojure.tools.logging :as log]
@@ -246,7 +246,9 @@
   [join-mgr service-ch join-ch]
   (go-loop []
     (if @should-stop
-      (log/info "service-acceptor stopped.")
+      (do
+        (close! join-ch)
+        (log/info "service-acceptor stopped."))
       (do
         (try
           (when-let [service (<! service-ch)]
@@ -364,6 +366,7 @@
   (let [service-ch (chan)
         join-ch    (chan)
         join-mgr   (join-manager connection-factory)]
+    (reset! should-stop false)
     (run-registrar-fetcher join-mgr registrar-source fetch-registrar-interval-ms)
     (run-service-acceptor join-mgr service-ch join-ch)
     (run-join-processor join-mgr join-ch send-recv-timeout-ms send-retry-count send-retry-interval-ms)
@@ -371,6 +374,12 @@
     (run-join-to-expired-registrar join-mgr service-ch rejoin-interval-ms)
     (run-dead-registrar-checker join-mgr dead-registrar-check-interval send-recv-timeout-ms send-retry-count send-retry-interval-ms)
     service-ch))
+
+(defn stop-join-manager
+  [service-ch]
+  (when service-ch 
+    (close! service-ch))
+  (reset! should-stop true))
 
 (defn join
   [service-ch service]

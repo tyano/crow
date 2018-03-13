@@ -30,14 +30,6 @@
                    :jvm-opts ["-Djava.net.preferIPv4Stack=true"]}
              :uberjar {:dependencies [[ch.qos.logback/logback-classic "1.2.3"]]
                        :resource-paths ["resources-release"]
-                       :aot :all
-                       :jvm-opts ["-Dclojure.compiler.direct-linking=true"]}}
-  :aot [crow.registrar-source
-        crow.registrar
-        crow.protocol
-        crow.discovery
-        crow.marshaller
-        crow.remote]
+                       :aot :all}}
   :main crow.registrar
   :javac-options ["-source" "1.8" "-target" "1.8"])
-

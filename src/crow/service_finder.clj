@@ -103,13 +103,25 @@
       (alter dead-registrars conj reg)
       other-reg)))
 
-(defn stop-finder
+
+(defprotocol StoppableFinder
+  (stop-finder [finder] "stop a service finder and release all resources this finder is holding."))
+
+(defn stoppable?
+  [finder]
+  (satisfies? StoppableFinder finder))
+
+(defn stop-finder*
   [finder]
   (when-let [stopped (::stopped finder)]
     (reset! stopped true)))
 
-
 ;; STANDARD SERVICE FINDER
+(defrecord StandardServiceFinder
+  []
+  StoppableFinder
+  (stop-finder [finder] (stop-finder* finder)))
+
 (defn standard-service-finder
   [connection-factory registrar-source]
   {:pre [registrar-source]}
@@ -136,6 +148,12 @@
 
 (defrecord CachedServiceFinder
   [service-map]
+
+  StoppableFinder
+  (stop-finder
+    [finder]
+    (stop-finder* finder)
+    (reset! service-map {}))
 
   ServiceCache
   (clear-cache
@@ -226,7 +244,7 @@
   (go-loop []
     (if (true? @(::stopped cached-finder))
       (log/info (str "service-finder: check-cached-services-task stopped. " (pr-str (select-keys cached-finder [::id]))))
-      (do 
+      (do
         (check-cached-services cached-finder timeout-ms send-retry-count send-retry-interval-ms)
         (<! (timeout check-interval-ms))
         (recur)))))

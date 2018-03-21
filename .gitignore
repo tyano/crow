@@ -11,3 +11,4 @@ crow.sublime-project
 crow.sublime-workspace
 *.iml
 .idea/
+.#*

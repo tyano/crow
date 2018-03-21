@@ -63,8 +63,9 @@
     (addLast "bytes-encoder" (ByteArrayEncoder.))))
 
 (def bootstrap
-  (async-connect/make-bootstrap
-    {::async-connect/channel-initializer initialize-channel}))
+  (delay
+   (async-connect/make-bootstrap
+    {::async-connect/channel-initializer initialize-channel})))
 
 (defn client
   [factory address port]

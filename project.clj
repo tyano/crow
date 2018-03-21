@@ -24,12 +24,13 @@
                                                       :update :always}]]
   :deploy-repositories [["releases" :clojars]
                         ["snapshots" :clojars]]
-  :profiles {:dev {:dependencies [[midje "1.9.1"]
-                                  [ch.qos.logback/logback-classic "1.2.3"]]
+  :profiles {:dev {:dependencies [[midje "1.9.1"]]
                    :resource-paths ["resources-dev"]
                    :jvm-opts ["-Djava.net.preferIPv4Stack=true"]}
-             :uberjar {:dependencies [[ch.qos.logback/logback-classic "1.2.3"]]
-                       :resource-paths ["resources-release"]
+             :logging {:dependencies [[ch.qos.logback/logback-classic "1.2.3"]]
+                       :resource-paths ["resources-logging"]}
+             :release {:resource-paths ["resources-release"]}
+             :uberjar {:resource-paths ["resources-release"]
                        :aot :all}}
   :main crow.registrar
   :javac-options ["-source" "1.8" "-target" "1.8"])

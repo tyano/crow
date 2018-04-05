@@ -23,6 +23,7 @@
 (def ^:const type-discovery      11)
 (def ^:const type-service-found  12)
 (def ^:const type-service-not-found  13)
+(def ^:const type-call-result-end 14)
 
 (def ^:dynamic *object-marshaller* (->EdnObjectMarshaller))
 
@@ -189,6 +190,18 @@
   (CallResult. obj))
 
 
+(defrecord CallResultEnd [] type-call-result-end
+           [ent]
+           (byte-array 0)
+           [data]
+           (CallResultEnd.))
+
+(defn call-result-end
+  []
+  (CallResultEnd.))
+
+
+
 (defrecord CallException [type stack-trace])
 
 (extend-msgpack CallException type-call-exception
@@ -322,6 +335,10 @@
 (defn call-result?
   [msg]
   (instance? CallResult msg))
+
+(defn call-result-end?
+  [msg]
+  (instance? CallResultEnd msg))
 
 (defn discovery?
   [msg]

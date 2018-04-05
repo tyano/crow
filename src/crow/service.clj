@@ -100,6 +100,13 @@
   [service]
   (deref (:service-id-ref service)))
 
+
+(defn- iterable?
+  [data]
+  (boolean
+   (when data
+     (or (coll? data) (seq? data)))))
+
 (def ^:const error-namespace-is-not-public 400)
 (def ^:const error-target-not-found 401)
 
@@ -109,8 +116,14 @@
   (trace-pr "remote-call response:"
     (if-let [target-fn (get handler-map {:namespace target-ns, :name fn-name}) #_(when (find-ns (symbol target-ns)) (find-var (symbol target-ns fn-name)))]
       (try
+
         (let [r (apply target-fn args)]
-          (call-result r))
+          (if (iterable? r)
+            (concat (for [data r]
+                      (call-result data))
+                    [(call-result-end)])
+            [(call-result r) (call-result-end)]))
+
         (catch Throwable ex
           (log/error ex "An error occurred in a function.")
           (let [[type throwable] (extract-exception ex)]
@@ -133,6 +146,7 @@
       (when-let [msg (<! read-ch)]
         (when
           (try
+
             (let [result (<! (thread
                                 (boxed
                                   (try
@@ -141,15 +155,23 @@
                                         (wrapper-fn @msg))
                                       (handle-request handler-map service @msg))
                                     (catch Throwable th th)))))
-                  resp   {:message @result, :flush? true}]
+
+                  resp   (let [data @result]
+                           (if (iterable? data)
+                             (for [result data]
+                               {:message result, :flush? (call-result-end? result)})
+                             [{:message data :flush? true}]))]
+
+              (doseq [data resp]
                 (alt!
-                  [[write-ch resp]]
+                  [[write-ch data]]
                   ([v ch] v)
 
                   [(if timeout-ms (timeout timeout-ms) (chan))]
                   ([v ch]
-                    (log/error "Service Timeout: Couldn't write response.")
-                    false)))
+                   (log/error "Service Timeout: Couldn't write response.")
+                   false))))
+
             (catch Throwable ex
               (log/error ex "An Error ocurred.")
               (let [[type throwable] (extract-exception ex)

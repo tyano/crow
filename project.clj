@@ -9,7 +9,6 @@
                  [clj-time "0.14.2"]
                  [org.clojure/core.async "0.4.474"]
                  [org.clojure/tools.logging "0.4.0"]
-                 [slingshot "0.12.2"]
                  [com.shelf/messagepack-framedecoder "1.0-SNAPSHOT"]
                  [ns-tracker "0.3.1"]
                  [clj-http "3.7.0"]

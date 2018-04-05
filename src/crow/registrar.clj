@@ -13,8 +13,7 @@
             [clojure.core.async :refer [go-loop chan <! onto-chan timeout]]
             [clojure.tools.logging :as log]
             [clojure.set :refer [superset?]]
-            [crow.utils :refer [extract-exception]]
-            [slingshot.support :refer [get-context]]
+            [crow.utils :refer [extract-exception]] 
             [clojure.core.async :refer [chan go-loop thread <! >! <!! >!! timeout alt! alts!]]
             [clojure.spec.test.alpha :refer [instrument instrumentable-syms]]
             [clojure.string :as string])
@@ -169,7 +168,7 @@
                     (>! write-ch resp)))
                 (catch Throwable ex
                   (log/error ex "An Error ocurred.")
-                  (let [[type throwable] (extract-exception (get-context ex))
+                  (let [[type throwable] (extract-exception ex)
                         ex-msg (call-exception type (format-stack-trace throwable))]
                     (alts! [[write-ch {:message ex-msg :flush? true}] (timeout timeout-ms)])
                     false)))

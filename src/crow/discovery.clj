@@ -6,7 +6,6 @@
             [crow.service :as service]
             [crow.service-finder :refer [reset-registrars! abandon-registrar!] :as finder]
             [clojure.tools.logging :as log]
-            [slingshot.slingshot :refer [throw+]]
             [crow.logging :refer [trace-pr info-pr]]
             [async-connect.box :refer [boxed]]
             [clojure.core.async :refer [<! <!! >! go]]))
@@ -43,13 +42,13 @@
                       (call-exception? msg)
                       (let [type-str    (:type msg)
                             stack-trace (:stack-trace msg)]
-                        (throw+ {:type (keyword type-str), :stack-trace stack-trace}))
+                        (throw (ex-info "Discovery failed for an exception." {:type (keyword type-str), :stack-trace stack-trace})))
 
                       (= ::request/timeout msg)
                       nil
 
                       :else
-                      (throw+ {:type ::illegal-reponse, :response msg})))
+                      (throw (ex-info "Illegal Response." {:type ::illegal-reponse, :response msg}))))
                   (catch Throwable th
                     (log/error th "An error occured when sending a discovery request.")
                     (abandon-registrar! finder registrar)
@@ -71,8 +70,8 @@
         (loop [regs (shuffle registrars) result nil]
           (cond
             result result
-            (not (seq regs)) (throw+ {:type ::service-not-found, :source registrar-source})
+            (not (seq regs)) (throw (ex-info "Service Not Found." {:type ::service-not-found, :source registrar-source}))
             :else (let [reg (first regs)]
                     (recur (rest regs) (discover-with finder reg service-desc options)))))
-        (throw+ {:type ::registrar-doesnt-exist, :source registrar-source})))))
+        (throw (ex-info "Registrar doesn't exist." {:type ::registrar-doesnt-exist, :source registrar-source}))))))
 

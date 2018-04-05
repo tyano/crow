@@ -1,16 +1,11 @@
-(ns crow.utils
-  (:require [slingshot.support :refer [get-context]]))
-
+(ns crow.utils)
 
 (defn extract-exception
-  [{:keys [object throwable wrapper]}]
-  (let [th   (or wrapper throwable)
+  [th]
+  (let [info (ex-data th)
         type (cond
-                (instance? Throwable object)
-                :error
-
-                (associative? object)
-                (or (:type object) :error)
+                (some? info)
+                (or (:type info) :error)
 
                 :else
                 :error)]

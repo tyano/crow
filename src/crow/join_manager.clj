@@ -6,7 +6,6 @@
             [crow.id-store :refer [write]]
             [clojure.core.async :refer [chan close! go-loop <! >! timeout <!! >!! onto-chan go] :as async]
             [clojure.set :refer [difference select] :as st]
-            [slingshot.slingshot :refer [throw+]]
             [clojure.tools.logging :as log]
             [clj-time.core :refer [now plus after? millis] :as t]
             [crow.logging :refer [trace-pr debug-pr]]
@@ -153,15 +152,15 @@
                           (= ::request/timeout msg)
                           (do
                             (trace-pr msg)
-                            (throw+ {:type msg
-                                     :info (error-info registrar service)}))
+                            (throw (ex-info "Timeout." {:type msg
+                                                        :info (error-info registrar service)})))
 
                           :else
                           (do
                             (debug-pr "illegal message:" msg)
-                            (throw+ {:type ::illegal-response
-                                     :message msg
-                                     :info (error-info registrar service)}))))
+                            (throw (ex-info "Illegal Message." {:type ::illegal-response
+                                                                :message msg
+                                                                :info (error-info registrar service)})))))
                       (catch Throwable e
                         (registrar-died! join-mgr service registrar)
                         e))]
@@ -201,15 +200,15 @@
                           (= ::request/timeout)
                           (do
                             (trace-pr msg)
-                            (throw+ {:type msg
-                                     :info (error-info registrar service)}))
+                            (throw (ex-info "Timeout." {:type msg
+                                                        :info (error-info registrar service)})))
 
                           :else
                           (do
                             (trace-pr "illegal message:" msg)
-                            (throw+ {:type ::illegal-response
-                                     :message msg
-                                     :info (error-info registrar service)}))))
+                            (throw (ex-info "Illegal Message." {:type ::illegal-response
+                                                                :message msg
+                                                                :info (error-info registrar service)})))))
                       (catch Throwable e
                         (registrar-died! join-mgr service registrar)
                         e))]

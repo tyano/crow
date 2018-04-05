@@ -5,7 +5,6 @@
             [clojure.tools.logging :as log]
             [crow.logging :refer [trace-pr]]
             [crow.logging :refer [trace-pr]]
-            [slingshot.slingshot :refer [try+ throw+]]
             [clojure.core.async :refer [<! >! <!! >!! go go-loop alt! alts! thread chan close!] :as async]
             [async-connect.client :refer [connect] :as async-connect]
             [async-connect.box :refer [boxed] :as box]
@@ -158,13 +157,13 @@
                   (if (> retry send-retry-count)
                     (cond
                       (connection-error? result)
-                      (throw+ {:type ::connection-error, :kind (:type result)})
+                      (throw (ex-info "Connection Error" {:type ::connection-error, :kind (:type result)}))
 
                       (instance? Throwable result)
                       (throw result)
 
                       :else
-                      (throw+ {:type ::retry-count-over, :last-result result}))
+                      (throw (ex-info "Retry count over." {:type ::retry-count-over, :last-result result})))
 
                     (let [{::async-connect/keys [write-ch] :as conn} (client connection-factory address port)
                           {:keys [type] :as c}

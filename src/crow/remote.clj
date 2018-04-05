@@ -9,7 +9,6 @@
             [clojure.core.async :refer [chan <!! >! <! close! go]]
             [clojure.core.async.impl.protocols :refer [ReadPort WritePort]]
             [clojure.tools.logging :as log]
-            [slingshot.slingshot :refer [try+ throw+]]
             [clojure.spec.alpha :as s])
   (:import [java.net ConnectException]))
 
@@ -77,12 +76,12 @@
               msg  (some-> (<! (request/send send-data)) (deref))
               resp (cond
                       (protocol-error? msg)
-                      (throw+ {:type :protocol-error, :error-code (:error-code msg), :message (:message msg)})
+                      (throw (ex-info "Protocol Error." {:type :protocol-error, :error-code (:error-code msg), :message (:message msg)}))
 
                       (call-exception? msg)
                       (let [type-str    (:type msg)
                             stack-trace (:stack-trace msg)]
-                        (throw+ {:type (keyword type-str)} stack-trace))
+                        (throw (ex-info "Remote function failed." {:type (keyword type-str) :stack-trace stack-trace})))
 
                       (call-result? msg)
                       (:obj msg)
@@ -107,7 +106,7 @@
 (defn find-services
   [finder service-desc options]
   (when-not finder
-    (throw+ {:type :finder-not-found, :message "ServiceFinder doesn't exist! You must start a service finder by start-service-finder at first!"}))
+    (throw (ex-info "Finder not found." {:type :finder-not-found, :message "ServiceFinder doesn't exist! You must start a service finder by start-service-finder at first!"})))
   (discover finder service-desc options))
 
 
@@ -232,12 +231,16 @@
 (defn- make-call-fn
   [ch finder service-desc call-desc options]
   (fn []
-    (try+
+    (try
       (<!!+ (async-fn ch finder service-desc call-desc options) finder)
-      (catch [:type ::connection-error] _
-        (:object &throw-context))
       (catch ConnectException ex
-        ex))))
+        ex)
+      (catch Throwable th
+        (if-let [data (when-let [info (ex-data th)]
+                        (when (= ::conneciton-error (:type info))
+                          info))]
+          data
+          (throw th))))))
 
 
 (defn- timeout?
@@ -279,10 +282,10 @@
       (if (> retry remote-call-retry-count)
         (cond
           (timeout? result)
-          (throw+ {:type ::connection-error, :kind (:type result)})
+          (throw (ex-info "Timeout." {:type ::connection-error, :kind (:type result)}))
 
           (connection-error? result)
-          (throw+ result)
+          (throw (ex-info "Connection Error." result))
 
           (instance? Throwable result)
           (throw result)

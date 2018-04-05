@@ -9,9 +9,7 @@
             [crow.logging :refer [trace-pr]]
             [crow.registrar-source :refer [static-registrar-source]]
             [crow.id-store :refer [->FileIdStore] :as id]
-            [slingshot.slingshot :refer [try+]]
             [crow.utils :refer [extract-exception]]
-            [slingshot.support :refer [get-context]]
             [async-connect.pool :refer [pooled-connection-factory]]
             [crow.request :as request]
             [clojure.string :refer [index-of]])
@@ -110,12 +108,12 @@
   (log/debug "remote-call: " (pr-str req))
   (trace-pr "remote-call response:"
     (if-let [target-fn (get handler-map {:namespace target-ns, :name fn-name}) #_(when (find-ns (symbol target-ns)) (find-var (symbol target-ns fn-name)))]
-      (try+
+      (try
         (let [r (apply target-fn args)]
           (call-result r))
-        (catch Object ex
-          (log/error (:throwable &throw-context) "An error occurred in a function.")
-          (let [[type throwable] (extract-exception &throw-context)]
+        (catch Throwable ex
+          (log/error ex "An error occurred in a function.")
+          (let [[type throwable] (extract-exception ex)]
             (call-exception type (format-stack-trace throwable)))))
 
       (protocol-error error-target-not-found
@@ -154,7 +152,7 @@
                     false)))
             (catch Throwable ex
               (log/error ex "An Error ocurred.")
-              (let [[type throwable] (extract-exception (get-context ex))
+              (let [[type throwable] (extract-exception ex)
                     ex-msg (call-exception type (format-stack-trace throwable))]
                 (alts! [[write-ch {:message ex-msg, :flush? true}] (timeout timeout-ms)])
                 false)))

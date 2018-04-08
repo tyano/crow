@@ -189,12 +189,13 @@
   [obj]
   (CallResult. obj))
 
+(defrecord CallResultEnd [])
 
-(defrecord CallResultEnd [] type-call-result-end
-           [ent]
-           (byte-array 0)
-           [data]
-           (CallResultEnd.))
+(extend-msgpack CallResultEnd type-call-result-end
+  [ent]
+  (byte-array 0)
+  [data]
+  (CallResultEnd.))
 
 (defn call-result-end
   []

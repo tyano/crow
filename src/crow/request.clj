@@ -4,7 +4,7 @@
             [msgpack.core :refer [pack unpack refine-ext] :as msgpack]
             [clojure.tools.logging :as log]
             [crow.logging :refer [trace-pr]]
-            [crow.logging :refer [trace-pr]]
+            [crow.protocol :refer [call-result? call-result-end?]]
             [clojure.core.async :refer [<! >! <!! >!! go go-loop alt! alts! thread chan close!] :as async]
             [async-connect.client :refer [connect] :as async-connect]
             [async-connect.box :refer [boxed] :as box]
@@ -208,41 +208,48 @@
   :ret  ::async-spec/async-channel)
 
 (defn send
-  [{:keys [::channel ::data ::timeout-ms]
+  [{::keys [channel data timeout-ms]
     :as send-data}]
 
   (log/trace "send-recv-timeout:" timeout-ms)
+
   (let [result-ch (or channel (chan))]
 
     (go
       (try
         (if-let [{::async-connect/keys [read-ch] :as conn} @(<! (try-send send-data))]
-          (let [result (try
-                          (let [msg (read-with-timeout read-ch timeout-ms)]
-                            (case msg
-                              ::timeout
-                              (do
-                                (log/error (str "Timeout: Couldn't receive a response for a data: " (pr-str data)))
-                                (async-connect/close conn true)
-                                ::timeout)
+          (try
+            (loop [msg (read-with-timeout read-ch timeout-ms)]
+              (cond
+                (= msg ::timeout)
+                (do
+                  (log/error (str "Timeout: Couldn't receive a response for a data: " (pr-str data)))
+                  (async-connect/close conn true)
+                  (>! result-ch (boxed ::timeout))
+                  (close! result-ch))
 
-                              nil
-                              (do
-                                (log/error (str "Drained: Peer closed: data: " (pr-str data)))
-                                nil)
+                (nil? msg)
+                (do
+                  (log/error (str "Drained: Peer closed: data: " (pr-str data)))
+                  (>! result-ch (boxed nil))
+                  (close! result-ch))
 
-                              msg))
+                (call-result? msg)
+                (do
+                  (>! result-ch (boxed msg))
+                  (recur (read-with-timeout read-ch timeout-ms)))
 
-                          (catch Throwable th
-                            (log/error th "send error!")
-                            th)
+                (call-result-end? msg)
+                (close! result-ch)))
 
-                          (finally
-                            (async-connect/close conn)))]
-            (>! result-ch (boxed result)))
+            (finally
+              (async-connect/close conn)))
 
           (close! result-ch))
+
         (catch Throwable th
-          (>! result-ch (boxed th)))))
+          (>! result-ch (boxed th))
+          (close! result-ch))))
+
     result-ch))
 

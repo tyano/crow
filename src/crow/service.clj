@@ -1,8 +1,8 @@
 (ns crow.service
   (:require [async-connect.server :refer [run-server close-wait] :as async-server]
             [async-connect.box :refer [boxed]]
-            [clojure.core.async :refer [chan go-loop thread <! >! <!! >!! alt! alts! timeout]]
-            [crow.protocol :refer [remote-call? ping? invalid-message protocol-error call-result call-exception ack] :as p]
+            [clojure.core.async :refer [chan go-loop thread <! >! <!! >!! alt! alts! alt!! timeout]]
+            [crow.protocol :refer [remote-call? ping? invalid-message protocol-error call-result call-result-end call-result-end? call-exception ack] :as p]
             [crow.request :refer [frame-decorder format-stack-trace packer unpacker] :as request]
             [crow.join-manager :refer [start-join-manager stop-join-manager join]]
             [clojure.tools.logging :as log]
@@ -110,75 +110,104 @@
 (def ^:const error-namespace-is-not-public 400)
 (def ^:const error-target-not-found 401)
 
+(defn- send-one-data!!
+  [write-ch data timeout-ms]
+  (alt!!
+    [[write-ch data]]
+    ([v ch] v)
+
+    [(if timeout-ms (timeout timeout-ms) (chan))]
+    ([v ch]
+     (log/error "Service Timeout: Couldn't write response.")
+     false)))
+
+(defn- make-call-exception
+  [ex]
+  (let [[type throwable] (extract-exception ex)]
+    (call-exception type (format-stack-trace throwable))))
+
 (defn- handle-remote-call
-  [handler-map {:keys [target-ns fn-name args] :as req}]
+  [handler-map
+   {:keys [write-ch service timeout-ms] :as write-params}
+   {:keys [target-ns fn-name args] :as req}]
+
   (log/debug "remote-call: " (pr-str req))
-  (trace-pr "remote-call response:"
-    (if-let [target-fn (get handler-map {:namespace target-ns, :name fn-name}) #_(when (find-ns (symbol target-ns)) (find-var (symbol target-ns fn-name)))]
-      (try
+  (if-let [target-fn (get handler-map {:namespace target-ns, :name fn-name}) #_(when (find-ns (symbol target-ns)) (find-var (symbol target-ns fn-name)))]
+    (let [r (apply target-fn args)]
+      (if (iterable? r)
+        (loop [items r write-count 0]
+          (if-let [item (first items)] ;; this call will realize a lazy sequence and the realization might make an exception.
+            ;; handle one item.
+            (do
+              (trace-pr "remote-call response:" item)
+              (when (send-one-data!! write-ch
+                                     {:message (call-result item)
+                                      :flush? (>= write-count 10)}
+                                     timeout-ms)
+                (recur (rest items) (if (>= write-count 10) 0 (inc write-count)))))
 
-        (let [r (apply target-fn args)]
-          (if (iterable? r)
-            (concat (for [data r]
-                      (call-result data))
-                    [(call-result-end)])
-            [(call-result r) (call-result-end)]))
+            ;; all items ware handled. send a call-result-end.
+            (send-one-data!! write-ch
+                             {:message (call-result-end)
+                              :flush? true}
+                             timeout-ms)))
 
-        (catch Throwable ex
-          (log/error ex "An error occurred in a function.")
-          (let [[type throwable] (extract-exception ex)]
-            (call-exception type (format-stack-trace throwable)))))
+        (do
+          (trace-pr "remote-call response:" r)
+          (send-one-data!! write-ch {:message (call-result r) :flush? false} timeout-ms)
+          (send-one-data!! write-ch {:message (call-result-end) :flush? true} timeout-ms))))
 
-      (protocol-error error-target-not-found
-                      (format "the fn %s/%s is not found." target-ns fn-name)))))
+    (send-one-data!! write-ch
+                     {:message (protocol-error error-target-not-found
+                                               (format "the fn %s/%s is not found." target-ns fn-name))}
+                     :flush? true)))
+
 
 (defn- handle-request
-  [handler-map service msg]
+  [handler-map {:keys [write-ch timeout-ms] :as write-params} msg]
   (cond
-    (ping? msg)        (do (log/trace "received a ping.") (ack))
-    (remote-call? msg) (handle-remote-call handler-map msg)
-    :else (invalid-message msg)))
+    (ping? msg)
+    (do
+      (log/trace "received a ping.")
+      (send-one-data!! write-ch {:message (ack) :flush? true} timeout-ms))
+
+    (remote-call? msg)
+    (handle-remote-call handler-map write-params msg)
+
+    :else
+    (send-one-data!! write-ch {:message (invalid-message msg) :flush? true} timeout-ms)))
+
 
 (defn- make-service-handler
   [handler-map service timeout-ms & [{:keys [:crow/middleware]}]]
   (fn [context read-ch write-ch]
-    (go-loop []
-      (when-let [msg (<! read-ch)]
-        (when
-          (try
+    (let [write-params {:service service
+                        :write-ch write-ch
+                        :timeout-ms timeout-ms}]
+      (go-loop []
+        (when-let [msg (<! read-ch)]
+          (when (try
+                  (let [result (<! (thread
+                                     (boxed
+                                      (try
+                                        (if middleware
+                                          (let [wrapper-fn (middleware (partial handle-request handler-map write-params))]
+                                            (wrapper-fn @msg))
+                                          (handle-request handler-map write-params @msg))
+                                        (catch Throwable th th)))))]
+                    @result)
 
-            (let [result (<! (thread
-                                (boxed
-                                  (try
-                                    (if middleware
-                                      (let [wrapper-fn (middleware (partial handle-request handler-map service))]
-                                        (wrapper-fn @msg))
-                                      (handle-request handler-map service @msg))
-                                    (catch Throwable th th)))))
+                  (catch Throwable ex
+                    (log/error ex "An Error ocurred.")
+                    (alt!
+                      [[write-ch {:message (make-call-exception ex) :flush? true}]]
+                      ([v ch] v)
 
-                  resp   (let [data @result]
-                           (if (iterable? data)
-                             (for [result data]
-                               {:message result, :flush? (call-result-end? result)})
-                             [{:message data :flush? true}]))]
+                      [(if timeout-ms (timeout timeout-ms) (chan))]
+                      ([v ch]
+                       false))))
+            (recur)))))))
 
-              (doseq [data resp]
-                (alt!
-                  [[write-ch data]]
-                  ([v ch] v)
-
-                  [(if timeout-ms (timeout timeout-ms) (chan))]
-                  ([v ch]
-                   (log/error "Service Timeout: Couldn't write response.")
-                   false))))
-
-            (catch Throwable ex
-              (log/error ex "An Error ocurred.")
-              (let [[type throwable] (extract-exception ex)
-                    ex-msg (call-exception type (format-stack-trace throwable))]
-                (alts! [[write-ch {:message ex-msg, :flush? true}] (timeout timeout-ms)])
-                false)))
-          (recur))))))
 
 (defn- channel-initializer
   [netty-ch config]

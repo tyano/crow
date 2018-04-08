@@ -73,25 +73,35 @@
                                    :timeout-ms timeout-ms
                                    :send-retry-count send-retry-count
                                    :send-retry-interval-ms send-retry-interval-ms}
-              msg  (some-> (<! (request/send send-data)) (deref))
-              resp (cond
-                      (protocol-error? msg)
-                      (throw (ex-info "Protocol Error." {:type :protocol-error, :error-code (:error-code msg), :message (:message msg)}))
+              result-ch (request/send send-data)]
 
-                      (call-exception? msg)
-                      (let [type-str    (:type msg)
-                            stack-trace (:stack-trace msg)]
-                        (throw (ex-info "Remote function failed." {:type (keyword type-str) :stack-trace stack-trace})))
+          (loop []
+            (when-let [result (<! result-ch)]
+              (let [msg @result]
+                (cond
+                  (protocol-error? msg)
+                  (>! ch (box (throw (ex-info "Protocol Error." {:type :protocol-error, :error-code (:error-code msg), :message (:message msg)}))))
 
-                      (call-result? msg)
-                      (:obj msg)
+                  (call-exception? msg)
+                  (>! ch
+                      (box
+                       (let [type-str    (:type msg)
+                             stack-trace (:stack-trace msg)]
+                         (throw (ex-info "Remote function failed." {:type (keyword type-str) :stack-trace stack-trace})))))
 
-                      (= ::request/timeout msg)
-                      msg
+                  (call-result? msg)
+                  (>! ch (box (:obj msg)))
 
-                      :else
-                      (throw (IllegalStateException. (str "No such message format: " (pr-str msg)))))]
-          (>! ch (box resp)))
+                  (= ::request/timeout msg)
+                  (>! ch (box msg))
+
+                  :else
+                  (>! ch (box
+                          (throw (IllegalStateException. (str "No such message format: " (pr-str msg)))))))))
+            (recur))
+
+          (close! ch))
+
         (catch Throwable th
           (>! ch (box service-desc service th)))))
     ch))
@@ -232,7 +242,11 @@
   [ch finder service-desc call-desc options]
   (fn []
     (try
-      (<!!+ (async-fn ch finder service-desc call-desc options) finder)
+      (let [result-ch (async-fn ch finder service-desc call-desc options)]
+        (loop [result []]
+          (if-let [msg (<!!+ result-ch finder)]
+            (recur (conj result msg))
+            result)))
       (catch ConnectException ex
         ex)
       (catch Throwable th

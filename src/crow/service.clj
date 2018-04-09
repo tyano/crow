@@ -2,7 +2,11 @@
   (:require [async-connect.server :refer [run-server close-wait] :as async-server]
             [async-connect.box :refer [boxed]]
             [clojure.core.async :refer [chan go-loop thread <! >! <!! >!! alt! alts! alt!! timeout]]
-            [crow.protocol :refer [remote-call? ping? invalid-message protocol-error call-result call-result-end call-result-end? call-exception ack] :as p]
+            [crow.protocol :refer [remote-call? ping? invalid-message protocol-error call-result
+                                   sequential-item-start sequential-item-start?
+                                   sequential-item sequential-item?
+                                   sequential-item-end sequential-item-end?
+                                   call-exception ack] :as p]
             [crow.request :refer [frame-decorder format-stack-trace packer unpacker] :as request]
             [crow.join-manager :refer [start-join-manager stop-join-manager join]]
             [clojure.tools.logging :as log]
@@ -100,12 +104,12 @@
   [service]
   (deref (:service-id-ref service)))
 
-
 (defn- iterable?
   [data]
   (boolean
    (when data
-     (or (coll? data) (seq? data)))))
+     (and (not (associative? data))
+          (or (coll? data) (seq? data))))))
 
 (def ^:const error-namespace-is-not-public 400)
 (def ^:const error-target-not-found 401)
@@ -135,27 +139,34 @@
   (if-let [target-fn (get handler-map {:namespace target-ns, :name fn-name}) #_(when (find-ns (symbol target-ns)) (find-var (symbol target-ns fn-name)))]
     (let [r (apply target-fn args)]
       (if (iterable? r)
-        (loop [items r write-count 0]
-          (if-let [item (first items)] ;; this call will realize a lazy sequence and the realization might make an exception.
-            ;; handle one item.
-            (do
-              (trace-pr "remote-call response:" item)
-              (when (send-one-data!! write-ch
-                                     {:message (call-result item)
-                                      :flush? (>= write-count 10)}
-                                     timeout-ms)
-                (recur (rest items) (if (>= write-count 10) 0 (inc write-count)))))
+        (do
+          (send-one-data!! write-ch
+                           {:message (sequential-item-start)
+                            :flush? false}
+                           timeout-ms)
 
-            ;; all items ware handled. send a call-result-end.
-            (send-one-data!! write-ch
-                             {:message (call-result-end)
-                              :flush? true}
-                             timeout-ms)))
+          (loop [items r write-count 0]
+            (if-let [item (first items)] ;; this call will realize a lazy sequence and the realization might make an exception.
+              ;; handle one item.
+              (do
+                (trace-pr "remote-call response:" item)
+                (when (send-one-data!! write-ch
+                                       {:message (sequential-item item)
+                                        :flush? (>= write-count 10)}
+                                       timeout-ms)
+                  (recur (rest items) (if (>= write-count 10) 0 (inc write-count)))))
+
+              ;; all items ware handled. send a sequential-item-end.
+              (let [resp (sequential-item-end)]
+                (trace-pr "remote-call response:" resp)
+                (send-one-data!! write-ch
+                                 {:message resp
+                                  :flush? true}
+                                 timeout-ms)))))
 
         (do
           (trace-pr "remote-call response:" r)
-          (send-one-data!! write-ch {:message (call-result r) :flush? false} timeout-ms)
-          (send-one-data!! write-ch {:message (call-result-end) :flush? true} timeout-ms))))
+          (send-one-data!! write-ch {:message (call-result r) :flush? true} timeout-ms))))
 
     (send-one-data!! write-ch
                      {:message (protocol-error error-target-not-found

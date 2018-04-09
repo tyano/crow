@@ -23,7 +23,13 @@
 (def ^:const type-discovery      11)
 (def ^:const type-service-found  12)
 (def ^:const type-service-not-found  13)
-(def ^:const type-call-result-end 14)
+
+(def ^:const type-sequential-item-start 14)
+(def ^:const type-sequential-item 15)
+(def ^:const type-sequential-item-end 16)
+
+(def ^:const type-ping 90)
+(def ^:const type-ack  91)
 
 (def ^:dynamic *object-marshaller* (->EdnObjectMarshaller))
 
@@ -98,6 +104,29 @@
   [address port service-id service-name attributes]
   (JoinRequest. address port service-id service-name attributes))
 
+
+
+(defrecord Ping [])
+(extend-msgpack Ping type-ping
+    [ent]
+    (byte-array 0)
+    [data]
+    (Ping.))
+
+(defn ping
+  []
+  (Ping.))
+
+(defrecord Ack [])
+(extend-msgpack Ack type-ack
+    [ent]
+    (byte-array 0)
+    [data]
+    (Ack.))
+
+(defn ack
+  []
+  (Ack.))
 
 
 (defrecord Registration [^String service-id expire-at])
@@ -189,17 +218,45 @@
   [obj]
   (CallResult. obj))
 
-(defrecord CallResultEnd [])
 
-(extend-msgpack CallResultEnd type-call-result-end
+(defrecord SequentialItemStart [])
+
+(extend-msgpack SequentialItemStart type-sequential-item-start
   [ent]
   (byte-array 0)
   [data]
-  (CallResultEnd.))
+  (SequentialItemStart.))
 
-(defn call-result-end
+(defn sequential-item-start
   []
-  (CallResultEnd.))
+  (SequentialItemStart.))
+
+
+(defrecord SequentialItem [obj])
+
+(extend-msgpack SequentialItem type-sequential-item
+  [ent]
+  (pack (marshal *object-marshaller* (:obj ent)))
+  [data]
+  (let [obj-marshalled (unpack data)
+        obj (unmarshal *object-marshaller* obj-marshalled)]
+    (SequentialItem. obj)))
+
+(defn sequential-item
+  [obj]
+  (SequentialItem. obj))
+
+(defrecord SequentialItemEnd [])
+
+(extend-msgpack SequentialItemEnd type-sequential-item-end
+  [ent]
+  (byte-array 0)
+  [data]
+  (SequentialItemEnd.))
+
+(defn sequential-item-end
+  []
+  (SequentialItemEnd.))
 
 
 
@@ -297,9 +354,6 @@
 
 
 
-(defn ping [] 2r01)
-(defn ack  [] 2r10)
-
 
 (defn join-request?
   [msg]
@@ -337,9 +391,17 @@
   [msg]
   (instance? CallResult msg))
 
-(defn call-result-end?
+(defn sequential-item-start?
   [msg]
-  (instance? CallResultEnd msg))
+  (instance? SequentialItemStart msg))
+
+(defn sequential-item?
+  [msg]
+  (instance? SequentialItem msg))
+
+(defn sequential-item-end?
+  [msg]
+  (instance? SequentialItemEnd msg))
 
 (defn discovery?
   [msg]
@@ -357,6 +419,11 @@
   [msg]
   (instance? ProtocolError msg))
 
-(defn ping? [msg] (= msg 2r01))
-(defn ack? [msg] (= msg 2r10))
+(defn ping?
+  [msg]
+  (instance? Ping msg))
+
+(defn ack?
+  [msg]
+  (instance? Ack msg))
 

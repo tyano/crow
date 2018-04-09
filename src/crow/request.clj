@@ -4,7 +4,7 @@
             [msgpack.core :refer [pack unpack refine-ext] :as msgpack]
             [clojure.tools.logging :as log]
             [crow.logging :refer [trace-pr]]
-            [crow.protocol :refer [call-result? call-result-end?]]
+            [crow.protocol :refer [call-result? sequential-item-start? sequential-item-end? sequential-item?]]
             [clojure.core.async :refer [<! >! <!! >!! go go-loop alt! alts! thread chan close!] :as async]
             [async-connect.client :refer [connect] :as async-connect]
             [async-connect.box :refer [boxed] :as box]
@@ -234,13 +234,26 @@
                   (>! result-ch (boxed nil))
                   (close! result-ch))
 
-                (call-result? msg)
+                (or (sequential-item-start? msg)
+                    (sequential-item? msg))
                 (do
                   (>! result-ch (boxed msg))
                   (recur (read-with-timeout read-ch timeout-ms)))
 
-                (call-result-end? msg)
-                (close! result-ch)))
+                (sequential-item-end? msg)
+                (do
+                  (>! result-ch (boxed msg))
+                  (close! result-ch))
+
+                (call-result? msg)
+                (do
+                  (>! result-ch (boxed msg))
+                  (close! result-ch))
+
+                :else
+                (do
+                  (>! result-ch (boxed msg))
+                  (close! result-ch))))
 
             (finally
               (async-connect/close conn)))

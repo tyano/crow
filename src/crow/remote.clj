@@ -1,12 +1,14 @@
 (ns crow.remote
   (:require [async-connect.client :as client]
-            [crow.protocol :refer [remote-call call-result? call-exception? protocol-error?]]
+            [crow.protocol :refer [remote-call call-result?
+                                   sequential-item-start? sequential-item? sequential-item-end?
+                                   call-exception? protocol-error?]]
             [crow.request :as request]
-            [crow.boxed :refer [box unbox service-info]]
+            [crow.boxed :refer [box service-info value]]
             [crow.discovery :refer [discover]]
             [crow.service-finder :refer [standard-service-finder] :as finder]
             [crow.logging :refer [debug-pr]]
-            [clojure.core.async :refer [chan <!! >! <! close! go]]
+            [clojure.core.async :refer [chan <!! >! <! close! go pipe]]
             [clojure.core.async.impl.protocols :refer [ReadPort WritePort]]
             [clojure.tools.logging :as log]
             [clojure.spec.alpha :as s])
@@ -85,9 +87,22 @@
                   (call-exception? msg)
                   (>! ch
                       (box
-                       (let [type-str    (:type msg)
-                             stack-trace (:stack-trace msg)]
-                         (throw (ex-info "Remote function failed." {:type (keyword type-str) :stack-trace stack-trace})))))
+                        (let [type-str    (:type msg)
+                              stack-trace (:stack-trace msg)]
+                          (throw (ex-info "Remote function failed." {:type (keyword type-str) :stack-trace stack-trace})))))
+
+                  (sequential-item-start? msg)
+                  (do (>! ch (box ::sequential-item-start))
+                      (recur))
+
+                  (sequential-item? msg)
+                  (do (>! ch (box (:obj msg)))
+                      (recur))
+
+                  (sequential-item-end? msg)
+                  (do
+                    (log/debug "sequential-item-end")
+                    (>! ch (box ::sequential-item-end)))
 
                   (call-result? msg)
                   (>! ch (box (:obj msg)))
@@ -97,9 +112,9 @@
 
                   :else
                   (>! ch (box
-                          (throw (IllegalStateException. (str "No such message format: " (pr-str msg)))))))))
-            (recur))
+                          (throw (IllegalStateException. (str "No such message format: " (pr-str msg))))))))))
 
+          (close! result-ch)
           (close! ch))
 
         (catch Throwable th
@@ -131,7 +146,7 @@
   (first (shuffle (find-services finder service-desc options))))
 
 
-(s/fdef async-fn
+(s/fdef async-fn*
   :args (s/cat :ch :async/channel
                :finder :crow/service-finder
                :service-desc ::service-descriptor
@@ -139,7 +154,7 @@
                :options ::discovery-options)
   :ret  :async/channel)
 
-(defn async-fn
+(defn async-fn*
   [ch
    {::finder/keys [connection-factory] :as finder}
    service-desc
@@ -148,9 +163,24 @@
   (log/debug (str "remote call. service: " (pr-str service-desc) ", fn: " (pr-str call-desc)))
   (if-let [service (find-service finder service-desc options)]
     (invoke ch connection-factory service-desc service call-desc options)
-    (throw (IllegalStateException. (format "Service Not Found: service-name=%s, attributes=%s"
-                                      (:service-name service-desc)
-                                      (pr-str (:attributes service-desc)))))))
+    (throw (ex-info (format "Service Not Found: service-name=%s, attributes=%s"
+                            (:service-name service-desc)
+                            (pr-str (:attributes service-desc)))
+                    {:service-descriptor service-desc}))))
+
+
+(defn async-fn
+  [ch
+   finder 
+   service-desc
+   call-desc
+   options]
+  (let [inner-ch  (chan 1 (filter #(and (not= ::sequential-item-start (value %))
+                                        (not= ::sequential-item-end (value %)))))
+        result-ch (or ch (chan))]
+    (pipe (async-fn* inner-ch finder service-desc call-desc options)
+          result-ch)
+    result-ch))
 
 (defmacro parse-call-list
   ([call-list]
@@ -197,14 +227,18 @@
   ([finder service-namespace attributes call-list options]
     `(async (chan) ~finder ~service-namespace ~attributes ~call-list ~options)))
 
+(defn handle-exception
+  [finder result ex]
+  (when-let [[service service-desc] (service-info result)]
+    (finder/remove-service finder service-desc service))
+  (throw ex))
+
 (defn handle-result
   [finder result]
   (try
-    (unbox result)
+    @result
     (catch Throwable th
-      (when-let [[service service-desc] (service-info result)]
-        (finder/remove-service finder service-desc service))
-      (throw th))))
+      (handle-exception th))))
 
 (defn <!!+
   "read a channel. if the result value is an instance of
@@ -242,19 +276,34 @@
   [ch finder service-desc call-desc options]
   (fn []
     (try
-      (let [result-ch (async-fn ch finder service-desc call-desc options)]
-        (loop [result []]
-          (if-let [msg (<!!+ result-ch finder)]
-            (recur (conj result msg))
+      (let [result-ch (async-fn* ch finder service-desc call-desc options)]
+        (loop [result [] sequential-result? false]
+          (if-let [box (<!! result-ch)]
+            (let [msg @box]
+              (log/trace "received message:" (pr-str msg))
+              (cond
+                (= ::sequential-item-start msg)
+                (recur [] true)
+
+                (= ::sequential-item-end msg)
+                result
+
+                sequential-result?
+                (recur (conj result msg) true)
+
+                :else
+                msg))
             result)))
+
       (catch ConnectException ex
-        ex)
+        (handle-exception ex))
+
       (catch Throwable th
         (if-let [data (when-let [info (ex-data th)]
                         (when (= ::conneciton-error (:type info))
                           info))]
           data
-          (throw th))))))
+          (handle-exception th))))))
 
 
 (defn- timeout?
@@ -274,8 +323,9 @@
 
 (defn- need-retry?
   [msg]
-  (when msg
-    (or (timeout? msg) (connection-error? msg) (connect-exception? msg))))
+  (boolean
+   (when msg
+     (or (timeout? msg) (connection-error? msg) (connect-exception? msg)))))
 
 
 (s/fdef try-call

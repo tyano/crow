@@ -168,7 +168,6 @@
                             (pr-str (:attributes service-desc)))
                     {:service-descriptor service-desc}))))
 
-
 (defn async-fn
   [ch
    finder 
@@ -228,8 +227,8 @@
     `(async (chan) ~finder ~service-namespace ~attributes ~call-list ~options)))
 
 (defn handle-exception
-  [finder result ex]
-  (when-let [[service service-desc] (service-info result)]
+  [finder boxed-result ex]
+  (when-let [[service service-desc] (service-info boxed-result)]
     (finder/remove-service finder service-desc service))
   (throw ex))
 
@@ -238,7 +237,7 @@
   (try
     @result
     (catch Throwable th
-      (handle-exception th))))
+      (handle-exception finder result th))))
 
 (defn <!!+
   "read a channel. if the result value is an instance of
@@ -296,14 +295,14 @@
             result)))
 
       (catch ConnectException ex
-        (handle-exception ex))
+        (handle-exception finder nil ex))
 
       (catch Throwable th
         (if-let [data (when-let [info (ex-data th)]
                         (when (= ::conneciton-error (:type info))
                           info))]
           data
-          (handle-exception th))))))
+          (handle-exception finder nil th))))))
 
 
 (defn- timeout?

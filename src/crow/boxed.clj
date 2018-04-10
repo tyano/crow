@@ -61,3 +61,10 @@
       (toString
         [this]
         (str "crow.boxed/Boxed[value=" value "]")))))
+
+(extend-protocol Boxed
+  nil
+  (service-info [_] nil)
+  (success? [_] false)
+  (failure? [_] false)
+  (value [_] nil))

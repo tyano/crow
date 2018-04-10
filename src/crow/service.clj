@@ -108,8 +108,7 @@
   [data]
   (boolean
    (when data
-     (and (not (associative? data))
-          (or (coll? data) (seq? data))))))
+     (or (set? data) (sequential? data))))) ;; sequential? will be false if the data is a set.
 
 (def ^:const error-namespace-is-not-public 400)
 (def ^:const error-target-not-found 401)

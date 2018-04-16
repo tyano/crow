@@ -242,7 +242,7 @@
       (throw th))))
 
 (defn start-service
-  [{:service/keys [address port name attributes id-store]
+  [{:service/keys [address remote-address port name attributes id-store]
     :join-manager/keys [fetch-registrar-interval-ms
                         heart-beat-buffer-ms
                         dead-registrar-check-interval
@@ -261,7 +261,7 @@
    handler-map]
   {:pre [port (not (clojure.string/blank? name)) id-store registrar-source fetch-registrar-interval-ms heart-beat-buffer-ms]}
   (let [sid     (id/read id-store)
-        service-fn (fn [address port] (new-service address port sid name attributes id-store))
+        service-fn (fn [port] (new-service remote-address port sid name attributes id-store))
         join-mgr (start-join-manager connection-factory
                                      registrar-source
                                      fetch-registrar-interval-ms
@@ -278,13 +278,13 @@
                                  :read-channel-builder   (fn [ch] (chan 50 unpacker))
                                  :write-channel-builder  (fn [ch] (chan 50 packer))
                                  :server-handler-factory (fn [host port]
-                                                            (let [service (service-fn host port)
+                                                            (let [service (service-fn port)
                                                                   service-handler (make-service-handler handler-map service send-recv-timeout config)]
                                                               (join join-mgr service)
+                                                              (log/info (str "#### SERVICE (name: " name ", service-address: " (or remote-address host) ", listening-address: " host ", port: " port ") starts."))
                                                               service-handler))
                                  :shutdown-hook          (fn [{:keys [host port]}]
                                                            (stop-join-manager join-mgr)
-                                                           (log/info (str "#### SERVICE (name: " name ", port: " port  ") stopped.")))})]
-    (log/info (str "#### SERVICE (name: " name ", port: " (async-server/port server) ") starts."))
+                                                           (log/info (str "#### SERVICE (name: " name ", service-address: " (or remote-address host) ", listening-address: " host ", port: " port ") stops.")))})]
     server))
 

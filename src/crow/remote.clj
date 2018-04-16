@@ -233,11 +233,12 @@
       (finder/remove-service finder service-descriptor service))))
 
 (defn handle-result
-  [finder result]
+  [result & finders]
   (try
     @result
     (catch Throwable th
-      (handle-exception finder result th))))
+      (apply handle-exception result finders)
+      (throw th))))
 
 (defn <!!+
   "read a channel. if the result value is an instance of
@@ -245,10 +246,10 @@
    result.
    This fn is a kind of <!! macro of core.async, so calling
    this fn will block current thread."
-  [ch finder]
+  [ch & finders]
   (when ch
     (when-let [result (<!! ch)]
-      (handle-result finder result))))
+      (apply handle-result result finders))))
 
 (defmacro <!+
   "read a channel. if the result value is an instance of
@@ -257,11 +258,11 @@
    This macro is a kind of <! macro of core.async, so this macro
    must be called in (go) block. it it why this is a macro, not fn.
    all contents of this macro is expanded into a go block."
-  [ch finder]
+  [ch & finders]
   `(let [ch# ~ch
-         finder# ~finder]
+         finders# ~finders]
       (when-let [result# (<! ch#)]
-        (handle-result finder# result#))))
+        (apply handle-result result# finders#))))
 
 (s/fdef make-call-fn
   :args (s/cat :ch :async/channel
@@ -295,14 +296,14 @@
             result)))
 
       (catch ConnectException ex
-        (handle-exception finder nil ex))
+        (throw ex))
 
       (catch Throwable th
         (if-let [data (when-let [info (ex-data th)]
                         (when (= ::conneciton-error (:type info))
                           info))]
           data
-          (handle-exception finder nil th))))))
+          (throw th))))))
 
 
 (defn- timeout?

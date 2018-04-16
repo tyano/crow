@@ -227,10 +227,10 @@
     `(async (chan) ~finder ~service-namespace ~attributes ~call-list ~options)))
 
 (defn handle-exception
-  [finder boxed-result ex]
-  (when-let [[service service-desc] (service-info boxed-result)]
-    (finder/remove-service finder service-desc service))
-  (throw ex))
+  [boxed-result & finders]
+  (when-let [{:keys [service service-descriptor]} (service-info boxed-result)]
+    (doseq [finder finders]
+      (finder/remove-service finder service-descriptor service))))
 
 (defn handle-result
   [finder result]

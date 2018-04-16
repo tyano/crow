@@ -24,7 +24,8 @@
       Boxed
       (service-info
         [this]
-        [used-service used-service-desc])
+        {:service used-service
+         :service-descriptor used-service-desc})
 
       (success? [this] (success-value? value))
       (failure? [this] (failure-value? value))

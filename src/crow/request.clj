@@ -42,7 +42,7 @@
       (refine-ext msg)
       msg)))
 
-(def connection-errors #{::timeout ::connect-failed ::connect-timeout})
+(def connection-errors #{::connect-failed ::connect-timeout})
 (defn connection-error? [v] (boolean (when v (connection-errors v))))
 
 (defn read-message
@@ -191,10 +191,13 @@
                          :result (:result c)}
 
                         :success
-                        (>! result-ch (boxed (:result c))))))
+                        (do
+                          (>! result-ch (boxed (:result c)))
+                          nil))))
 
                   (catch Throwable th
-                    (>! result-ch (boxed th))))]
+                    (>! result-ch (boxed th))
+                    nil))]
 
           (when-let [{:keys [retry-count result]} recur-result]
             (recur retry-count result))))

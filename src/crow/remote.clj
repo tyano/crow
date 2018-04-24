@@ -92,12 +92,16 @@
                           (throw (ex-info "Remote function failed." {:type (keyword type-str) :stack-trace stack-trace})))))
 
                   (sequential-item-start? msg)
-                  (do (>! ch (box ::sequential-item-start))
-                      (recur))
+                  (do
+                    (log/debug "sequential-item-start")
+                    (>! ch (box ::sequential-item-start))
+                    (recur))
 
                   (sequential-item? msg)
-                  (do (>! ch (box (:obj msg)))
-                      (recur))
+                  (do
+                    (log/trace "sequential-item")
+                    (>! ch (box (:obj msg)))
+                    (recur))
 
                   (sequential-item-end? msg)
                   (do
@@ -168,18 +172,43 @@
                             (pr-str (:attributes service-desc)))
                     {:service-descriptor service-desc}))))
 
+
+(defn- timeout?
+  [msg]
+  (boolean
+   (when msg
+     (= msg :request/timeout))))
+
+(defn- connection-error?
+  [msg]
+  (boolean
+   (when msg
+     (when-let [info (ex-data msg)]
+       (= :request/connection-error (:type info))))))
+
+(defn- connect-exception?
+  [msg]
+  (when msg
+    (instance? ConnectException msg)))
+
+
 (defn async-fn
   [ch
    finder 
    service-desc
    call-desc
    options]
-  (let [inner-ch  (chan 1 (filter #(and (not= ::sequential-item-start (value %))
-                                        (not= ::sequential-item-end (value %)))))
+  (let [inner-ch  (chan 1 (comp (filter #(and (not= ::sequential-item-start (value %))
+                                              (not= ::sequential-item-end (value %))))
+                                (map #(cond
+                                        (timeout? (value %))
+                                        (box (ex-info "Timeout." {:type ::connection-error, :kind :request/timeout}))
+
+                                        :else
+                                        %))))
         result-ch (or ch (chan))]
     (pipe (async-fn* inner-ch finder service-desc call-desc options)
-          result-ch)
-    result-ch))
+          result-ch)))
 
 (defmacro parse-call-list
   ([call-list]
@@ -260,7 +289,7 @@
    all contents of this macro is expanded into a go block."
   [ch & finders]
   `(let [ch# ~ch
-         finders# ~finders]
+         finders# ~(vec finders)]
       (when-let [result# (<! ch#)]
         (apply handle-result result# finders#))))
 
@@ -306,20 +335,6 @@
           (throw th))))))
 
 
-(defn- timeout?
-  [msg]
-  (boolean (when msg (= msg :crow.request/timeout))))
-
-(defn- connection-error?
-  [msg]
-  (when msg
-    (and (associative? msg)
-         (= ::connection-error (:type msg)))))
-
-(defn- connect-exception?
-  [msg]
-  (when msg
-    (instance? ConnectException msg)))
 
 (defn- need-retry?
   [msg]
@@ -346,10 +361,7 @@
       (if (> retry remote-call-retry-count)
         (cond
           (timeout? result)
-          (throw (ex-info "Timeout." {:type ::connection-error, :kind (:type result)}))
-
-          (connection-error? result)
-          (throw (ex-info "Connection Error." result))
+          (throw (ex-info "Timeout." {:type ::connection-error, :kind ::timeout}))
 
           (instance? Throwable result)
           (throw result)

@@ -194,21 +194,41 @@
 
 (defn async-fn
   [ch
-   finder 
+   finder
    service-desc
    call-desc
    options]
-  (let [inner-ch  (chan 1 (comp (filter #(and (not= ::sequential-item-start (value %))
-                                              (not= ::sequential-item-end (value %))))
-                                (map #(cond
-                                        (timeout? (value %))
-                                        (box (ex-info "Timeout." {:type ::connection-error, :kind :request/timeout}))
+  (let [fn-ch (chan 1)]
+    (async-fn* fn-ch finder service-desc call-desc options)
+    (go
+      (try
+        (loop [sequential-result? false]
+          (when-let [boxed-data (<! fn-ch)]
+            (let [msg (value boxed-data)]
+              (log/trace "received message:" (pr-str msg))
+              (cond
+                (= ::sequential-item-start msg)
+                (recur true)
 
-                                        :else
-                                        %))))
-        result-ch (or ch (chan))]
-    (pipe (async-fn* inner-ch finder service-desc call-desc options)
-          result-ch)))
+                (= ::sequential-item-end msg)
+                nil
+
+                (timeout? msg)
+                (>! ch (box (ex-info "Timeout." {:type ::connection-error, :kind :request/timeout})))
+
+                sequential-result?
+                (do
+                  (>! ch boxed-data)
+                  (recur true))
+
+                :else
+                (>! ch boxed-data)))))
+        (catch Throwable th
+          (>! ch (box th)))
+        (finally
+          (close! fn-ch)
+          (close! ch))))
+    ch))
 
 (defmacro parse-call-list
   ([call-list]
@@ -305,24 +325,24 @@
   [ch finder service-desc call-desc options]
   (fn []
     (try
-      (let [result-ch (async-fn* ch finder service-desc call-desc options)]
-        (loop [result [] sequential-result? false]
-          (if-let [box (<!! result-ch)]
-            (let [msg @box]
-              (log/trace "received message:" (pr-str msg))
-              (cond
-                (= ::sequential-item-start msg)
-                (recur [] true)
+      (async-fn* ch finder service-desc call-desc options)
+      (loop [result [] sequential-result? false]
+        (if-let [boxed-data (<!! ch)]
+          (let [msg @boxed-data]
+            (log/trace "received message:" (pr-str msg))
+            (cond
+              (= ::sequential-item-start msg)
+              (recur [] true)
 
-                (= ::sequential-item-end msg)
-                result
+              (= ::sequential-item-end msg)
+              result
 
-                sequential-result?
-                (recur (conj result msg) true)
+              sequential-result?
+              (recur (conj result msg) true)
 
-                :else
-                msg))
-            result)))
+              :else
+              msg))
+          result))
 
       (catch ConnectException ex
         (throw ex))
@@ -332,7 +352,9 @@
                         (when (= ::conneciton-error (:type info))
                           info))]
           data
-          (throw th))))))
+          (throw th)))
+      (finally
+        (close! ch)))))
 
 
 

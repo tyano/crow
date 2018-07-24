@@ -187,6 +187,17 @@
         (debug-pr "find-services - service-desc : found-services: " [service-desc services])
         services))))
 
+(defn- remove-service-from-cache
+  [finder service]
+  (swap! (:service-map finder)
+         (fn [service-map]
+           (into {}
+                 (map
+                  (fn [[service-desc service-coll]]
+                    (log/info (str "service " service " now be removed from service-cache"))
+                    [service-desc (set (filter #(not= service %) service-coll))])
+                  service-map)))))
+
 (defn- send-ping
   [{::keys [connection-factory] :as finder}
    {:keys [address port] :as service}
@@ -220,13 +231,6 @@
                         ;; a service doesn't respond.
                         ;; remove the service from a cache
                         (log/info th (str "service " service " is dead."))
-                        (swap! (:service-map finder)
-                          (fn [service-map]
-                            (into {}
-                              (map
-                                (fn [[service-desc service-coll]]
-                                  [service-desc (set (filter #(not= service %) service-coll))])
-                                service-map))))
                         false))]
         (>! result-ch (boxed result))))
     result-ch))
@@ -236,7 +240,10 @@
   (let [service-map @(:service-map finder)
         services    (distinct (apply concat (vals service-map)))]
     (doseq [service services]
-      (send-ping finder service timeout-ms send-retry-count send-retry-interval-ms))))
+      (let [ch (send-ping finder service timeout-ms send-retry-count send-retry-interval-ms)]
+        (go
+          (when (false? @(<! ch))
+            (remove-service-from-cache finder service)))))))
 
 (defn start-check-cached-services-task
   "Check the activity of cached services and if services are down, remove the services from a cache."

@@ -1,14 +1,16 @@
 (ns crow.discovery
   (:refer-clojure :exclude [send])
-  (:require [crow.protocol :refer [discovery service-found? service-not-found? call-exception?]]
+  (:require [clojure.spec.alpha :as s]
+            [clojure.tools.logging :as log]
+            [clojure.core.async :refer [<! <!! >! go]]
+            [crow.protocol :refer [discovery service-found? service-not-found? call-exception?]]
             [crow.request :as request]
             [crow.registrar-source :as source]
             [crow.service :as service]
             [crow.service-finder :refer [reset-registrars! abandon-registrar!] :as finder]
-            [clojure.tools.logging :as log]
+            [crow.spec :as crow-spec]
             [crow.logging :refer [trace-pr info-pr]]
-            [async-connect.box :refer [boxed]]
-            [clojure.core.async :refer [<! <!! >! go]]))
+            [async-connect.box :refer [boxed]]))
 
 
 (defn- discover-with
@@ -53,6 +55,7 @@
                     (log/error th "An error occured when sending a discovery request.")
                     (abandon-registrar! finder registrar)
                     (throw th)))]
+    (s/assert ::crow-spec/found-services result)
     (finder/reset-services finder service-desc result)
     result))
 

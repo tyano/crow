@@ -1,6 +1,7 @@
 (ns crow.service
   (:require [async-connect.server :refer [run-server close-wait] :as async-server]
             [async-connect.box :refer [boxed]]
+            [clojure.spec.alpha :as s]
             [clojure.core.async :refer [chan go-loop thread <! >! <!! >!! alt! alts! alt!! timeout]]
             [crow.protocol :refer [remote-call? ping? invalid-message protocol-error call-result
                                    sequential-item-start sequential-item-start?
@@ -85,20 +86,37 @@
 
 ;; SERVER IMPLEMENTATIONS
 
-(defrecord Service
+(s/def :crow/service
+  (s/keys :req-un
+          [:service/address
+           :service/port
+           :service/service-id-ref
+           :service/registrars
+           :service/name
+           :service/attributes
+           :crow/id-store]))
+
+(defn- make-service-map
   [address
    port
    service-id-ref
    registrars
    name
    attributes
-   id-store])
+   id-store]
+  {:address address
+   :port port
+   :service-id-ref service-id-ref
+   :registrars registrars
+   :name name
+   :attributes attributes
+   :id-store id-store})
 
 (defn new-service
   ([address port name attributes id-store]
-    (Service. address port (ref nil) (ref #{}) name attributes id-store))
+    (make-service-map address port (ref nil) (ref #{}) name attributes id-store))
   ([address port service-id name attributes id-store]
-    (Service. address port (ref service-id) (ref #{}) name attributes id-store)))
+    (make-service-map address port (ref service-id) (ref #{}) name attributes id-store)))
 
 (defn service-id
   [service]

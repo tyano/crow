@@ -1,7 +1,8 @@
 (ns crow.id-store
   (:refer-clojure :exclude [read])
   (:require [clojure.string :refer [blank?]]
-            [clojure.java.io :refer [writer reader]])
+            [clojure.java.io :refer [writer reader]]
+            [clojure.spec.alpha :as s])
   (:import [java.io FileNotFoundException Writer Reader]))
 
 (defprotocol ServiceIdStore
@@ -12,6 +13,9 @@
   nil
   (write [this service-id] nil)
   (read [this] nil))
+
+(s/def :crow/id-store
+  #(satisfies? ServiceIdStore %))
 
 
 (defrecord FileIdStore [file-path]

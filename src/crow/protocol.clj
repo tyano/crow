@@ -314,14 +314,15 @@
 
 (extend-msgpack ServiceFound type-service-found
   [ent]
-  (pack (vec (mapcat #(vector (:address %) (:port %) (:service-name %) (pr-str (:attributes %))) (:services ent))))
+  (pack (vec (mapcat #(vector (:address %) (:port %) (:service-id %) (:service-name %) (pr-str (:attributes %))) (:services ent))))
   [data]
-  (let [service-data-coll (partition 4 (unpack data))
-        services (for [[address port service-name attr-edn] service-data-coll]
+  (let [service-data-coll (partition 5 (unpack data))
+        services (for [[address port service-id service-name attr-edn] service-data-coll]
                     (try
                       (let [attributes (edn/read-string attr-edn)]
                         {:address address
                          :port port
+                         :service-id service-id
                          :service-name service-name
                          :attributes attributes})
                       (catch Throwable th

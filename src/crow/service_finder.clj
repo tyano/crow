@@ -1,15 +1,16 @@
 (ns crow.service-finder
   (:require [clojure.core.async :refer [go-loop timeout <! >! <!! go chan]]
             [clojure.set :refer [difference]]
+            [clojure.spec.alpha :as s]
+            [clojure.tools.logging :as log]
             [crow.protocol :refer [ping ack?]]
             [crow.request :as request]
             [crow.registrar-source :as source]
-            [clojure.tools.logging :as log]
             [crow.logging :refer [trace-pr debug-pr info-pr]]
+            [crow.spec :as crow-spec]
             [async-connect.box :refer [boxed]]
-            [clojure.spec.alpha :as s]
             [async-connect.client :as client])
-  (:import [java.util UUID]))
+  (:import [java.util UUID Date]))
 
 (s/def ::id #(instance? UUID %))
 (s/def ::dead-registrar-check-interval-ms pos-int?)
@@ -146,38 +147,75 @@
   (add-services [finder service-desc service-coll] finder)
   (find-services [finder service-desc] nil))
 
+
+(s/def ::service
+  (s/keys :req-un []))
+
+(s/def :cache/time inst?)
+(s/def ::cache-info
+  (s/keys :req
+          [:cache/service
+           :cache/time]))
+
 (defrecord CachedServiceFinder
-  [service-map]
+  [service-map time-cache]
 
   StoppableFinder
   (stop-finder
     [finder]
     (stop-finder* finder)
-    (reset! service-map {}))
+    (dosync
+     (ref-set service-map {})
+     (ref-set time-cache {}))
+    nil)
 
   ServiceCache
   (clear-cache
     [finder]
-    (reset! service-map {})
+    (dosync
+     (ref-set service-map {})
+     (ref-set time-cache {}))
     finder)
 
   (remove-service
     [finder service-desc service]
     (when (and service-desc service)
-      (swap! service-map update service-desc disj service))
+      (dosync
+       (alter service-map update service-desc disj service)
+       (alter time-cache dissoc (:service-id service))))
     finder)
 
   (reset-services
     [finder service-desc service-coll]
     (when service-desc
       (trace-pr "reset-services - service-desc : services: " [service-desc service-coll])
-      (swap! service-map assoc service-desc (set service-coll)))
+      (s/assert ::crow-spec/found-services service-coll)
+      (dosync
+       (let [old-services (get @service-map service-desc [])]
+         (alter service-map assoc service-desc (set service-coll))
+         (alter time-cache
+                (fn [cache]
+                  (let [reset-cache (reduce #(dissoc %1 (:service-id %2))
+                                            cache
+                                            old-services)]
+                    (reduce
+                     #(assoc %1 (:service-id %2) (Date.))
+                     reset-cache
+                     (distinct service-coll))))))))
     finder)
 
   (add-services
     [finder service-desc service-coll]
     (when (and service-desc (seq service-coll))
-      (swap! service-map update service-desc #(apply conj (or % #{}) service-coll)))
+      (s/assert ::crow-spec/found-services service-coll)
+      (dosync
+       (ref-set service-map update service-desc #(apply conj (or % #{}) service-coll))
+
+       (ref-set time-cache (fn [cache]
+                             (reduce
+                              #(assoc %1 (:service-id %2) (Date.))
+                              cache
+                              (distinct service-coll))))))
     finder)
 
   (find-services
@@ -187,82 +225,61 @@
         (debug-pr "find-services - service-desc : found-services: " [service-desc services])
         services))))
 
+
+(s/fdef remove-service-from-cache
+    :args (s/cat :finder :crow/service-finder
+                 :service ::crow-spec/found-service)
+    :ret map?)
+
 (defn- remove-service-from-cache
   [finder service]
-  (swap! (:service-map finder)
-         (fn [service-map]
-           (into {}
-                 (map
-                  (fn [[service-desc service-coll]]
-                    (log/info (str "service " service " now be removed from service-cache"))
-                    [service-desc (set (filter #(not= service %) service-coll))])
-                  service-map)))))
+  (dosync
+   (alter (:service-map finder)
+          (fn [service-map]
+            (into {}
+                  (map
+                    (fn [[service-desc service-coll]]
+                      [service-desc (set (filter #(not= service %) service-coll))])
+                    service-map))))
+   (alter (:time-cache finder) dissoc (:service-id service)))
+  (log/debug (str "service " service " now is removed from service-cache"))
+  nil)
 
-(defn- send-ping
-  [{::keys [connection-factory] :as finder}
-   {:keys [address port] :as service}
-   timeout-ms
-   send-retry-count
-   send-retry-interval-ms]
 
-  (let [send-data #::request{:connection-factory connection-factory
-                             :address address
-                             :port port
-                             :data (ping)
-                             :timeout-ms timeout-ms
-                             :send-retry-count send-retry-count
-                             :send-retry-interval-ms send-retry-interval-ms}
-        read-ch   (request/send send-data)
-        result-ch (chan)]
-    (go
-      (let [result (try
-                      (let [resp (some-> (<! read-ch) (deref))]
-                          (cond
-                            (nil? resp)
-                            false
-
-                            (ack? resp)
-                            true
-
-                            :else
-                             (throw (IllegalStateException. (str "Unknown response: " (pr-str resp))))))
-
-                      (catch Throwable th
-                        ;; a service doesn't respond.
-                        ;; remove the service from a cache
-                        (log/info th (str "service " service " is dead."))
-                        false))]
-        (>! result-ch (boxed result))))
-    result-ch))
+(s/fdef check-cached-services
+    :args (s/cat :finder :crow/service-finder
+                 :cache-timeout-ms pos-int?))
 
 (defn- check-cached-services
-  [finder timeout-ms send-retry-count send-retry-interval-ms]
-  (let [service-map @(:service-map finder)
-        services    (distinct (apply concat (vals service-map)))]
-    (doseq [service services]
-      (let [ch (send-ping finder service timeout-ms send-retry-count send-retry-interval-ms)]
-        (go
-          (when (false? @(<! ch))
-            (remove-service-from-cache finder service)))))))
+  [finder cache-timeout-ms]
+  (let [service-map      @(:service-map finder)
+        services         (distinct (apply concat (vals service-map)))
+        expired-services (->> (for [service services]
+                                (let [time (get @(:time-cache finder) (:service-id service) (Date.))
+                                      diff (- (.. (Date.) (getTime)) (.. time (getTime)))]
+                                  (when (> diff cache-timeout-ms) service)))
+                              (filter some?))]
+    (doseq [service expired-services]
+      (remove-service-from-cache finder service))))
 
 (defn start-check-cached-services-task
   "Check the activity of cached services and if services are down, remove the services from a cache."
-  [cached-finder check-interval-ms timeout-ms send-retry-count send-retry-interval-ms]
+  [cached-finder check-interval-ms cache-timeout-ms]
   (go-loop []
     (if (true? @(::stopped cached-finder))
       (log/info (str "service-finder: check-cached-services-task stopped. " (pr-str (select-keys cached-finder [::id]))))
       (do
-        (check-cached-services cached-finder timeout-ms send-retry-count send-retry-interval-ms)
+        (check-cached-services cached-finder cache-timeout-ms)
         (<! (timeout check-interval-ms))
         (recur)))))
 
 (defn cached-service-finder
-  [connection-factory registrar-source check-interval-ms timeout-ms send-retry-count send-retry-interval-ms]
+  [connection-factory registrar-source check-interval-ms cache-timeout-ms]
   {:pre [registrar-source]}
-  (let [finder (-> (->CachedServiceFinder (atom {}))
+  (let [finder (-> (->CachedServiceFinder (ref {}) (ref {}))
                    (assoc ::connection-factory connection-factory)
                    (init-service-finder registrar-source))]
-    (start-check-cached-services-task finder check-interval-ms timeout-ms send-retry-count send-retry-interval-ms)
+    (start-check-cached-services-task finder check-interval-ms cache-timeout-ms)
     finder))
 
 

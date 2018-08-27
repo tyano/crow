@@ -1,7 +1,14 @@
 (ns crow.registrar
-  (:require [async-connect.server :refer [run-server close-wait] :as async-server]
-            [async-connect.box :refer [boxed]]
+  (:require [clojure.spec.alpha :as s]
+            [clojure.core.async :refer [chan go-loop thread <! >! <!! >!! timeout alt! alts!]]
+            [clojure.spec.test.alpha :refer [instrument instrumentable-syms]]
+            [clojure.string :as string]
+            [clojure.core.async :refer [go-loop chan <! onto-chan timeout]]
+            [clojure.tools.logging :as log]
+            [clojure.set :refer [superset?]]
             [clj-time.core :refer [now after? plus millis] :as t]
+            [async-connect.server :refer [run-server close-wait] :as async-server]
+            [async-connect.box :refer [boxed]]
             [crow.protocol :refer [lease lease-expired registration invalid-message
                                    join-request? heart-beat? discovery? ping?
                                    protocol-error ack call-exception
@@ -10,13 +17,7 @@
             [crow.service :as sv]
             [crow.request :refer [write-with-timeout read-with-timeout]]
             [crow.logging :refer [trace-pr debug-pr info-pr]]
-            [clojure.core.async :refer [go-loop chan <! onto-chan timeout]]
-            [clojure.tools.logging :as log]
-            [clojure.set :refer [superset?]]
-            [crow.utils :refer [extract-exception]] 
-            [clojure.core.async :refer [chan go-loop thread <! >! <!! >!! timeout alt! alts!]]
-            [clojure.spec.test.alpha :refer [instrument instrumentable-syms]]
-            [clojure.string :as string])
+            [crow.utils :refer [extract-exception]])
   (:import [java.util UUID]
            [io.netty.channel
               ChannelPipeline
@@ -29,12 +30,42 @@
 (def ^:const default-renewal-ms 10000)
 (def ^:const default-watch-interval 2000)
 
-(defrecord Registrar [name renewal-ms watch-interval services])
-(defrecord ServiceInfo [address port service-id name attributes expire-at])
+(s/def ::service-info
+  (s/keys :req-un [:service/address
+                   :service/port
+                   :service/service-id
+                   :service/name
+                   :service/attributes
+                   :service/expire-at]))
+
+(s/def ::registrar
+  (s/keys :req-un [:registrar/name
+                   :registrar/renewal-ms
+                   :registrar/watch-interval
+                   :registrar/services]))
+
+(s/fdef new-registrar
+    :ret ::registrar)
 
 (defn new-registrar
   ([name renewal-ms watch-interval]
-    (Registrar. name renewal-ms watch-interval (atom {}))))
+   {:name name
+    :renewal-ms renewal-ms
+    :watch-interval watch-interval
+    :services (atom {})}))
+
+
+(s/fdef new-service-info
+    :ret ::service-info)
+
+(defn new-service-info
+  [address port service-id name attributes expire-at]
+  {:address address
+   :port port
+   :service-id service-id
+   :name name
+   :attributes attributes
+   :expire-at expire-at})
 
 (defn- new-service-id
   []
@@ -46,7 +77,7 @@
   (let [service-id (or sid (new-service-id))
         expire-at  (-> (now) (plus (millis (:renewal-ms registrar))))
         services   (swap! (:services registrar)
-                      #(assoc % service-id (ServiceInfo.
+                      #(assoc % service-id (new-service-info
                                               address
                                               port
                                               service-id
@@ -123,6 +154,7 @@
       (let [service-coll (for [svc services]
                             {:address      (:address svc)
                              :port         (:port svc)
+                             :service-id   (:service-id svc)
                              :service-name (:name svc)
                              :attributes   (:attributes svc)})]
         (service-found service-coll))

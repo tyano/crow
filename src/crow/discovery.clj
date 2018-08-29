@@ -17,7 +17,7 @@
   [{::finder/keys [connection-factory] :as finder}
    {:keys [address port] :as registrar}
    {:keys [service-name attributes] :as service-desc}
-   {:keys [timeout-ms send-retry-count send-retry-interval-ms] :or {send-retry-count 3 send-retry-interval-ms (long 500)} :as options}]
+   {:keys [timeout-ms] :as options}]
   (trace-pr "options:" options)
   (let [req     (discovery service-name attributes)
         result  (try
@@ -25,9 +25,7 @@
                                         :address address,
                                         :port port
                                         :data req
-                                        :timeout-ms timeout-ms
-                                        :send-retry-count send-retry-count
-                                        :send-retry-interval-ms send-retry-interval-ms}
+                                        :timeout-ms timeout-ms}
                         msg (some-> (<!! (request/send data)) (deref))]
                     (cond
                       (nil? msg)

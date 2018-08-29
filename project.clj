@@ -1,6 +1,5 @@
-(defproject crow "2.1-SNAPSHOT"
+(defproject crow "2.2-SNAPSHOT"
   :description "Crow is a library for collaborating with distributed services implemented by Clojure."
-  :url "http://example.com/FIXME"
   :license {:name "Eclipse Public License"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
   :dependencies [[org.clojure/clojure "1.9.0"]

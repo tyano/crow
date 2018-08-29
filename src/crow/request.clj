@@ -1,18 +1,19 @@
 (ns crow.request
   (:refer-clojure :exclude [send])
-  (:require [msgpack.core :as msgpack]
-            [msgpack.core :refer [pack unpack refine-ext] :as msgpack]
+  (:require [clojure.spec.alpha :as s]
             [clojure.tools.logging :as log]
+            [clojure.core.async :refer [<! >! <!! >!! go go-loop alt! alts! thread chan close!] :as async]
+            [msgpack.core :as msgpack]
+            [msgpack.core :refer [pack unpack refine-ext] :as msgpack]
             [crow.logging :refer [trace-pr]]
             [crow.protocol :refer [call-result? sequential-item-start? sequential-item-end? sequential-item?]]
-            [clojure.core.async :refer [<! >! <!! >!! go go-loop alt! alts! thread chan close!] :as async]
             [async-connect.client :refer [connect] :as async-connect]
             [async-connect.box :refer [boxed] :as box]
-            [async-connect.spec :as async-spec]
-            [clojure.spec.alpha :as s])
+            [async-connect.spec :as async-spec])
   (:import [com.shelf.messagepack MessagePackFrameDecoder]
            [msgpack.core Ext]
            [java.net ConnectException]
+           [java.util.concurrent TimeoutException]
            [io.netty.handler.codec.bytes
               ByteArrayDecoder
               ByteArrayEncoder]))
@@ -110,8 +111,6 @@
 (s/def ::port pos-int?)
 (s/def ::req any?)
 (s/def ::timeout-ms (s/nilable pos-int?))
-(s/def ::send-retry-count (s/nilable #(or (zero? %) (pos-int? %))))
-(s/def ::send-retry-interval-ms (s/nilable #(or (zero? %) (pos-int? %))))
 
 (s/def :crow/request
   (s/keys
@@ -120,90 +119,40 @@
           ::port
           ::data]
     :opt [::channel
-          ::timeout-ms
-          ::send-retry-count
-          ::send-retry-interval-ms]))
+          ::timeout-ms]))
 
 (s/fdef try-send
   :args (s/cat :request :crow/request)
   :ret  ::async-spec/async-channel)
 
 (defn- try-send
-  [{:keys [::connection-factory
-           ::address
-           ::port
-           ::data
-           ::timeout-ms
-           ::send-retry-count
-           ::send-retry-interval-ms]
-    :or {send-retry-count 0
-         send-retry-interval-ms 0}
-    :as send-data}]
+  [{::keys [connection-factory
+            address
+            port
+            data
+            timeout-ms] :as send-data}]
 
-  (letfn [(retry-send
-            [conn retry-count result]
-            (when conn
-              (async-connect/close conn true)
-              (log/debug "channel closed."))
-            (Thread/sleep (* send-retry-interval-ms retry-count))
-            (when (<= retry-count send-retry-count)
-              (log/info (format "retry! -- times: %d/%d" retry-count send-retry-count)))
-            {:type :recur :retry-count retry-count :result result})]
+  (let [result-ch (chan)]
+    (go
+      (try
+        (let [{::async-connect/keys [write-ch] :as conn} (client connection-factory address port)
+              result (case (write-with-timeout write-ch {:message data :flush? true} timeout-ms)
+                       false
+                       (throw (ConnectException. (str "Couldn't send a message: " (pr-str data))))
 
-    (let [result-ch (chan)]
-      (go-loop [retry 0 result nil]
-        (let [recur-result
-                (try
-                  (if (> retry send-retry-count)
-                    (cond
-                      (connection-error? result)
-                      (throw (ex-info "Connection Error" {:type ::connection-error, :kind (:type result)}))
+                       ::timeout
+                       (throw (TimeoutException. (str "Timeout: Couldn't send a message: " (pr-str data))))
 
-                      (instance? Throwable result)
-                      (throw result)
+                       conn)]
 
-                      :else
-                      (throw (ex-info "Retry count over." {:type ::retry-count-over, :last-result result})))
+          (>! result-ch (boxed result))
+          nil)
 
-                    (let [{::async-connect/keys [write-ch] :as conn} (client connection-factory address port)
-                          {:keys [type] :as c}
-                              (try
-                                (case (write-with-timeout write-ch {:message data :flush? true} timeout-ms)
-                                  false
-                                  (do
-                                    (log/error (str "Couldn't send a message: " (pr-str data)))
-                                    (retry-send conn (inc retry) ::connect-failed))
+        (catch Throwable th
+          (>! result-ch (boxed th))
+          nil)))
 
-                                  ::timeout
-                                  (do
-                                    (log/error (str "Timeout: Couldn't send a message: " (pr-str data)))
-                                    (retry-send conn (inc retry) ::connect-timeout))
-
-                                  {:type :success :result conn})
-
-                                (catch ConnectException ex
-                                  (log/error ex "Can not send data. an exception occurred.")
-                                  (retry-send nil (inc retry) ex)))]
-                      (case type
-                        :recur
-                        {:type :recur
-                         :retry-count (:retry-count c)
-                         :result (:result c)}
-
-                        :success
-                        (do
-                          (>! result-ch (boxed (:result c)))
-                          nil))))
-
-                  (catch Throwable th
-                    (>! result-ch (boxed th))
-                    nil))]
-
-          (when-let [{:keys [retry-count result]} recur-result]
-            (recur retry-count result))))
-
-      result-ch)))
-
+    result-ch))
 
 
 (s/fdef send

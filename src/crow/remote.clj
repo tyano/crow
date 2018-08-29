@@ -12,7 +12,8 @@
             [clojure.core.async.impl.protocols :refer [ReadPort WritePort]]
             [clojure.tools.logging :as log]
             [clojure.spec.alpha :as s])
-  (:import [java.net ConnectException]))
+  (:import [java.net ConnectException]
+           [java.util.concurrent TimeoutException]))
 
 (s/def :async/channel (s/and #(satisfies? ReadPort %) #(satisfies? WritePort %)))
 
@@ -30,16 +31,8 @@
                    ::fn-args]))
 
 (s/def ::timeout-ms pos-int?)
-(s/def ::send-retry-count pos-int?)
-(s/def ::send-retry-interval-ms pos-int?)
-(s/def ::remote-call-retry-count pos-int?)
-(s/def ::remote-call-retry-interval-ms pos-int?)
 (s/def ::discovery-options
-  (s/keys :opt-un [::timeout-ms
-                   ::send-retry-count
-                   ::send-retry-interval-ms
-                   ::remote-call-retry-count
-                   ::remote-call-retry-interval-ms]))
+  (s/keys :opt-un [::timeout-ms]))
 
 (s/def ::address string?)
 (s/def ::port pos-int?)
@@ -61,8 +54,7 @@
    service-desc
    {:keys [address port] :as service}
    {:keys [target-ns fn-name fn-args]}
-   {:keys [timeout-ms send-retry-count send-retry-interval-ms]
-      :or {send-retry-count 3, send-retry-interval-ms 500}}]
+   {:keys [timeout-ms]}]
 
   (log/trace "invoke")
   (let [data (remote-call target-ns fn-name fn-args)]
@@ -72,9 +64,7 @@
                                    :address address
                                    :port port
                                    :data data
-                                   :timeout-ms timeout-ms
-                                   :send-retry-count send-retry-count
-                                   :send-retry-interval-ms send-retry-interval-ms}
+                                   :timeout-ms timeout-ms}
               result-ch (request/send send-data)]
 
           (loop []
@@ -112,11 +102,10 @@
                   (>! ch (box (:obj msg)))
 
                   (= ::request/timeout msg)
-                  (>! ch (box msg))
+                  (>! ch (box (TimeoutException.)))
 
                   :else
-                  (>! ch (box
-                          (throw (IllegalStateException. (str "No such message format: " (pr-str msg))))))))))
+                  (>! ch (box (ex-info (str "No such message format: " (pr-str msg)) {})))))))
 
           (close! result-ch)
           (close! ch))
@@ -179,19 +168,6 @@
    (when msg
      (= msg :request/timeout))))
 
-(defn- connection-error?
-  [msg]
-  (boolean
-   (when msg
-     (when-let [info (ex-data msg)]
-       (= :request/connection-error (:type info))))))
-
-(defn- connect-exception?
-  [msg]
-  (when msg
-    (instance? ConnectException msg)))
-
-
 (defn async-fn
   [ch
    finder
@@ -213,9 +189,6 @@
                 (= ::sequential-item-end msg)
                 nil
 
-                (timeout? msg)
-                (>! ch (box (ex-info "Timeout." {:type ::connection-error, :kind :request/timeout})))
-
                 sequential-result?
                 (do
                   (>! ch boxed-data)
@@ -223,6 +196,7 @@
 
                 :else
                 (>! ch boxed-data)))))
+
         (catch Throwable th
           (>! ch (box th)))
         (finally
@@ -313,57 +287,6 @@
       (when-let [result# (<! ch#)]
         (apply handle-result result# finders#))))
 
-(s/fdef make-call-fn
-  :args (s/cat :ch :async/channel
-               :finder :crow/service-finder
-               :service-desc ::service-descriptor
-               :call-desc ::call-descriptor
-               :options ::discovery-options)
-  :ret  (s/fspec :args empty? :ret any?))
-
-(defn- make-call-fn
-  [ch finder service-desc call-desc options]
-  (fn []
-    (try
-      (async-fn* ch finder service-desc call-desc options)
-      (loop [result [] sequential-result? false]
-        (if-let [boxed-data (<!! ch)]
-          (let [msg @boxed-data]
-            (log/trace "received message:" (pr-str msg))
-            (cond
-              (= ::sequential-item-start msg)
-              (recur [] true)
-
-              (= ::sequential-item-end msg)
-              result
-
-              sequential-result?
-              (recur (conj result msg) true)
-
-              :else
-              msg))
-          result))
-
-      (catch ConnectException ex
-        (throw ex))
-
-      (catch Throwable th
-        (if-let [data (when-let [info (ex-data th)]
-                        (when (= ::conneciton-error (:type info))
-                          info))]
-          data
-          (throw th)))
-      (finally
-        (close! ch)))))
-
-
-
-(defn- need-retry?
-  [msg]
-  (boolean
-   (when msg
-     (or (timeout? msg) (connection-error? msg) (connect-exception? msg)))))
-
 
 (s/fdef try-call
   :args (s/cat :ch :async/channel
@@ -374,33 +297,28 @@
   :ret  any?)
 
 (defn try-call
-  [ch finder service-desc call-desc
-   {:keys [remote-call-retry-count remote-call-retry-interval-ms]
-    :or {remote-call-retry-count 3 remote-call-retry-interval-ms 500} :as options}]
-
-  (let [call-fn (make-call-fn ch finder service-desc call-desc options)]
-    (loop [result nil retry 0]
-      (if (> retry remote-call-retry-count)
-        (cond
-          (timeout? result)
-          (throw (ex-info "Timeout." {:type ::connection-error, :kind ::timeout}))
-
-          (instance? Throwable result)
-          (throw result)
-
-          :else
-          result)
-
-        (let [r (call-fn)]
+  [ch finder service-desc call-desc options]
+  (try
+    (async-fn* ch finder service-desc call-desc options)
+    (loop [result [] sequential-result? false]
+      (if-let [boxed-data (<!! ch)]
+        (let [msg @boxed-data]
+          (log/trace "received message:" (pr-str msg))
           (cond
-            (need-retry? r)
-            (let [new-retry (inc retry)]
-              (log/debug (format "RETRY! %d/%d" new-retry remote-call-retry-count))
-              (Thread/sleep (* remote-call-retry-interval-ms new-retry))
-              (recur r new-retry))
+            (= ::sequential-item-start msg)
+            (recur [] true)
+
+            (= ::sequential-item-end msg)
+            result
+
+            sequential-result?
+            (recur (conj result msg) true)
 
             :else
-            r))))))
+            msg))
+        result))
+    (finally
+      (close! ch))))
 
 (defmacro call
   ([ch finder call-list opts]

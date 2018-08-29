@@ -266,15 +266,11 @@
                         dead-registrar-check-interval
                         rejoin-interval-ms
                         send-recv-timeout
-                        send-retry-count
-                        send-retry-interval-ms
                         connection-factory
                         registrar-source]
       :or {port 0
            attributes {}
-           send-recv-timeout 2000
-           send-retry-count 3
-           send-retry-interval-ms 500}
+           send-recv-timeout 2000}
       :as config}
    handler-map]
   {:pre [port (not (clojure.string/blank? name)) id-store registrar-source fetch-registrar-interval-ms heart-beat-buffer-ms]}
@@ -286,9 +282,7 @@
                                      dead-registrar-check-interval
                                      heart-beat-buffer-ms
                                      rejoin-interval-ms
-                                     send-recv-timeout
-                                     send-retry-count
-                                     send-retry-interval-ms)
+                                     send-recv-timeout)
         server (run-server
                  #::async-server{:address                address
                                  :port                   port

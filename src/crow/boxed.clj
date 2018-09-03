@@ -1,4 +1,6 @@
-(ns crow.boxed)
+(ns crow.boxed
+  (:require [crow.utils :refer [select-ns-keys]]
+            [crow.discovery.service :as service-info]))
 
 (defprotocol Boxed
   (service-info [this] "return a vector of a service instance which execute an remote call and a service-descriptor
@@ -19,13 +21,15 @@
   (not (success-value? value)))
 
 (defn box
-  ([used-service-desc used-service value]
+  ([invoke-info value]
     (reify
       Boxed
       (service-info
         [this]
-        {:service used-service
-         :service-descriptor used-service-desc})
+        {:service (select-ns-keys invoke-info
+                                  :crow.discovery.service)
+         :service-descriptor (select-ns-keys invoke-info
+                                             :crow.service-descriptor)})
 
       (success? [this] (success-value? value))
       (failure? [this] (failure-value? value))
@@ -41,7 +45,7 @@
       Object
       (toString
         [this]
-        (str "crow.boxed/Boxed[value=" value ", service-info=" [used-service used-service-desc] "]"))))
+        (str "crow.boxed/Boxed[value=" value ", service-info=" invoke-info "]"))))
 
   ([value]
     (reify

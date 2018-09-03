@@ -16,6 +16,7 @@
                                    service-found service-not-found] :as p]
             [crow.request :refer [frame-decorder format-stack-trace packer unpacker] :as request]
             [crow.service :as sv]
+            [crow.registrar.service :refer [new-service-info] :as service-info]
             [crow.request :refer [write-with-timeout read-with-timeout]]
             [crow.logging :refer [trace-pr debug-pr info-pr]]
             [crow.utils :refer [extract-exception]])
@@ -31,42 +32,24 @@
 (def ^:const default-renewal-ms 10000)
 (def ^:const default-watch-interval 2000)
 
-(s/def ::service-info
-  (s/keys :req-un [:service/address
-                   :service/port
-                   :service/service-id
-                   :service/name
-                   :service/attributes
-                   :service/expire-at]))
 
 (s/def ::registrar
-  (s/keys :req-un [:registrar/name
-                   :registrar/renewal-ms
-                   :registrar/watch-interval
-                   :registrar/services]))
+  (s/keys :req [::name
+                ::renewal-ms
+                ::watch-interval
+                ::services]))
 
 (s/fdef new-registrar
     :ret ::registrar)
 
+(s/def ::services (s/map-of ::service-info/service-id :crow.registrar/service-info))
+
 (defn new-registrar
   ([name renewal-ms watch-interval]
-   {:name name
-    :renewal-ms renewal-ms
-    :watch-interval watch-interval
-    :services (atom {})}))
-
-
-(s/fdef new-service-info
-    :ret ::service-info)
-
-(defn new-service-info
-  [address port service-id name attributes expire-at]
-  {:address address
-   :port port
-   :service-id service-id
-   :name name
-   :attributes attributes
-   :expire-at expire-at})
+   #::{:name name
+       :renewal-ms renewal-ms
+       :watch-interval watch-interval
+       :services (atom {})}))
 
 (defn- new-service-id
   []
@@ -76,8 +59,8 @@
   [registrar address port sid service-name attributes]
   (log/info "service registration:" address port sid service-name (pr-str attributes))
   (let [service-id (or sid (new-service-id))
-        expire-at  (-> (now) (plus (millis (:renewal-ms registrar))))
-        services   (swap! (:services registrar)
+        expire-at  (-> (now) (plus (millis (::renewal-ms registrar))))
+        services   (swap! (::services registrar)
                       #(assoc % service-id (new-service-info
                                               address
                                               port
@@ -92,13 +75,13 @@
 (defn accept-heartbeat
   [registrar service-id]
   (log/trace "accept-heartbeat:" service-id)
-  (let [expire-at (-> (now) (plus (millis (:renewal-ms registrar))))
-        services  (swap! (:services registrar)
+  (let [expire-at (-> (now) (plus (millis (::renewal-ms registrar))))
+        services  (swap! (::services registrar)
                     (fn [service-map]
                       (if (service-map service-id)
                         (update-in service-map [service-id]
                           (fn [old-info]
-                            (assoc old-info :expire-at expire-at)))
+                            (assoc old-info ::service-info/expire-at expire-at)))
                         service-map)))
         current   (services service-id)]
     (trace-pr "heartbeat response:"
@@ -108,7 +91,7 @@
 
 (defn service-expired
   [registrar service-id]
-  (swap! (:services registrar) #(dissoc % service-id)))
+  (swap! (::services registrar) #(dissoc % service-id)))
 
 
 (defn- check-expiration
@@ -116,7 +99,7 @@
   (go-loop []
     (log/trace "check-expiration")
     (let [[service-id service-info] (<! ch)]
-      (when (after? (now) (:expire-at service-info))
+      (when (after? (now) (::service-info/expire-at service-info))
         (info-pr "service expired:" service-info)
         (service-expired registrar service-id)))
     (recur)))
@@ -125,9 +108,9 @@
   [registrar ch]
   (go-loop []
     (log/trace "watch-services")
-    (when (seq @(:services registrar))
-      (onto-chan ch @(:services registrar) false))
-    (<! (timeout (:watch-interval registrar)))
+    (when (seq @(::services registrar))
+      (onto-chan ch @(::services registrar) false))
+    (<! (timeout (::watch-interval registrar)))
     (recur)))
 
 (defn process-registrar
@@ -139,13 +122,13 @@
 (defn- service-matches?
   [service service-name attributes]
   (if-let [attrs (not-empty attributes)]
-    (and (= service-name (:name service))
-         (superset? (set (:attributes service)) (set attrs)))
-    (= service-name (:name service))))
+    (and (= service-name (::service-info/name service))
+         (superset? (set (::service-info/attributes service)) (set attrs)))
+    (= service-name (::service-info/name service))))
 
 (defn- find-matched-services
   [registrar service-name attributes]
-  (filter #(service-matches? % service-name attributes) (vals (deref (:services registrar)))))
+  (filter #(service-matches? % service-name attributes) (vals (deref (::services registrar)))))
 
 (defn accept-discovery
   [registrar service-name attributes]
@@ -153,16 +136,16 @@
   (debug-pr "discovery response:"
     (if-let [services (not-empty (find-matched-services registrar service-name attributes))]
       (let [service-coll (for [svc services]
-                            {:address      (:address svc)
-                             :port         (:port svc)
-                             :service-id   (:service-id svc)
-                             :service-name (:name svc)
-                             :attributes   (:attributes svc)})]
+                           {:address (::service-info/address svc)
+                            :port (::service-info/port svc)
+                            :service-id (::service-info/service-id svc)
+                            :service-name (::service-info/name svc)
+                            :attributes (::service-info/attributes svc)})]
         (service-found service-coll))
       (do
         (log/debug "service not found.")
         (log/trace "current registared services:")
-        (doseq [svc @(:services registrar)]
+        (doseq [svc @(::services registrar)]
           (trace-pr "" svc))
         (service-not-found service-name attributes)))))
 

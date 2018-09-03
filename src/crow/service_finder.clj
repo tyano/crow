@@ -7,7 +7,7 @@
             [crow.request :as request]
             [crow.registrar-source :as source]
             [crow.logging :refer [trace-pr debug-pr info-pr]]
-            [crow.spec :as crow-spec]
+            [crow.discovery.service]
             [async-connect.box :refer [boxed]]
             [async-connect.client :as client])
   (:import [java.util UUID Date]))
@@ -189,7 +189,7 @@
     [finder service-desc service-coll]
     (when service-desc
       (trace-pr "reset-services - service-desc : services: " [service-desc service-coll])
-      (s/assert ::crow-spec/found-services service-coll)
+      (s/assert (s/coll-of :crow.discovery/service) service-coll)
       (dosync
        (let [old-services (get @service-map service-desc [])]
          (alter service-map assoc service-desc (set service-coll))
@@ -207,7 +207,7 @@
   (add-services
     [finder service-desc service-coll]
     (when (and service-desc (seq service-coll))
-      (s/assert ::crow-spec/found-services service-coll)
+      (s/assert (s/coll-of :crow.discovery/service) service-coll)
       (dosync
        (ref-set service-map update service-desc #(apply conj (or % #{}) service-coll))
 
@@ -228,7 +228,7 @@
 
 (s/fdef remove-service-from-cache
     :args (s/cat :finder :crow/service-finder
-                 :service ::crow-spec/found-service)
+                 :service :crow.discovery/service)
     :ret map?)
 
 (defn- remove-service-from-cache

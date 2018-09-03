@@ -4,10 +4,14 @@
                                    sequential-item-start? sequential-item? sequential-item-end?
                                    call-exception? protocol-error?]]
             [crow.request :as request]
-            [crow.boxed :refer [box service-info value]]
-            [crow.discovery :refer [discover]]
+            [crow.boxed :refer [box value] :as boxed]
+            [crow.discovery :refer [discover] :as discovery]
+            [crow.discovery.service :as service-info]
             [crow.service-finder :refer [standard-service-finder] :as finder]
             [crow.logging :refer [debug-pr]]
+            [crow.service-descriptor :as service-desc]
+            [crow.call-descriptor :as call-desc]
+            [crow.call-options :as call-opts]
             [clojure.core.async :refer [chan <!! >! <! close! go pipe]]
             [clojure.core.async.impl.protocols :refer [ReadPort WritePort]]
             [clojure.tools.logging :as log]
@@ -17,44 +21,29 @@
 
 (s/def :async/channel (s/and #(satisfies? ReadPort %) #(satisfies? WritePort %)))
 
-(s/def ::service-name string?)
-(s/def ::attributes (s/nilable (s/map-of keyword? any?)))
-(s/def ::service-descriptor
-  (s/keys :req-un [::service-name ::attributes]))
 
-(s/def ::target-ns string?)
-(s/def ::fn-name string?)
-(s/def ::fn-args (s/nilable (s/coll-of any?)))
-(s/def ::call-descriptor
-  (s/keys :req-un [::target-ns
-                   ::fn-name
-                   ::fn-args]))
-
-(s/def ::timeout-ms pos-int?)
-(s/def ::discovery-options
-  (s/keys :opt-un [::timeout-ms]))
-
-(s/def ::address string?)
-(s/def ::port pos-int?)
-(s/def ::service
-  (s/keys :req-un [::address, ::port]))
+(s/def ::invoke-info
+  (s/keys :req [::service-desc/service-name
+                ::service-desc/attributes
+                ::call-desc/target-ns
+                ::call-desc/fn-name
+                ::call-desc/fn-args
+                ::service-info/address
+                ::service-info/port
+                ::call-opts/timeout-ms]))
 
 (s/fdef invoke
   :args (s/cat :ch :async/channel
                :factory ::client/connection-factory
-               :service-desc ::service-descriptor
-               :service ::service
-               :call-desc ::call-descriptor
-               :discovery-opts ::discovery-options)
+               :invoke-info ::invoke-info)
   :ret  :async/channel)
 
 (defn invoke
   [ch
    factory
-   service-desc
-   {:keys [address port] :as service}
-   {:keys [target-ns fn-name fn-args]}
-   {:keys [timeout-ms]}]
+   {::service-info/keys [address port]
+    ::call-desc/keys [target-ns fn-name fn-args]
+    ::call-opts/keys [timeout-ms] :as invoke-info}]
 
   (log/trace "invoke")
   (let [data (remote-call target-ns fn-name fn-args)]
@@ -111,71 +100,63 @@
           (close! ch))
 
         (catch Throwable th
-          (>! ch (box service-desc service th)))))
+          (>! ch (box invoke-info th)))))
     ch))
 
 
 (s/fdef find-services
   :args (s/cat :finder :crow/service-finder
-               :service-desc ::service-descriptor
-               :options ::discovery-options)
-  :ret  (s/coll-of ::service))
+               :discovery-info ::discovery/discovery-info)
+  :ret  (s/coll-of :crow.discovery/service))
 
 (defn find-services
-  [finder service-desc options]
+  [finder discovery-info]
   (when-not finder
     (throw (ex-info "Finder not found." {:type :finder-not-found, :message "ServiceFinder doesn't exist! You must start a service finder by start-service-finder at first!"})))
-  (discover finder service-desc options))
+  (discover finder discovery-info))
 
 
 (s/fdef find-service
   :args (s/cat :finder :crow/service-finder
-               :service-desc ::service-descriptor
-               :options ::discovery-options)
-  :ret  ::service)
+               :discovery-info ::discovery/discovery-info)
+  :ret  :crow.discovery/service)
 
 (defn find-service
-  [finder service-desc options]
-  (first (shuffle (find-services finder service-desc options))))
+  [finder discovery-info]
+  (first (shuffle (find-services finder discovery-info))))
 
+(s/def ::async-call-info
+  (s/keys :req [::service-desc/service-name
+                ::service-desc/attributes
+                ::call-desc/target-ns
+                ::call-desc/fn-name
+                ::call-desc/fn-args
+                ::call-opts/timeout-ms]))
 
 (s/fdef async-fn*
   :args (s/cat :ch :async/channel
                :finder :crow/service-finder
-               :service-desc ::service-descriptor
-               :call-desc ::call-descriptor
-               :options ::discovery-options)
+               :call-info ::async-call-info)
   :ret  :async/channel)
 
 (defn async-fn*
   [ch
    {::finder/keys [connection-factory] :as finder}
-   service-desc
-   call-desc
-   options]
-  (log/debug (str "remote call. service: " (pr-str service-desc) ", fn: " (pr-str call-desc)))
-  (if-let [service (find-service finder service-desc options)]
-    (invoke ch connection-factory service-desc service call-desc options)
+   call-info]
+  (log/debug (str "remote call. service: " (pr-str call-info)))
+  (if-let [service (find-service finder call-info)]
+    (invoke ch connection-factory (merge call-info service))
     (throw (ex-info (format "Service Not Found: service-name=%s, attributes=%s"
-                            (:service-name service-desc)
-                            (pr-str (:attributes service-desc)))
-                    {:service-descriptor service-desc}))))
-
-
-(defn- timeout?
-  [msg]
-  (boolean
-   (when msg
-     (= msg :request/timeout))))
+                            (::service-desc/service-name call-info)
+                            (pr-str (::service-desc/attributes call-info)))
+                    call-info))))
 
 (defn async-fn
   [ch
    finder
-   service-desc
-   call-desc
-   options]
+   call-info]
   (let [fn-ch (chan 1)]
-    (async-fn* fn-ch finder service-desc call-desc options)
+    (async-fn* fn-ch finder call-info)
     (go
       (try
         (loop [sequential-result? false]
@@ -212,12 +193,11 @@
           target-ns (first ns-fn-coll)
           fn-name (last ns-fn-coll)
           args (vec (rest call-list))]
-      `(vector
-          {:service-name ~target-ns
-           :attributes {}}
-          {:target-ns ~target-ns
-           :fn-name ~fn-name
-           :fn-args ~args})))
+      `{::service-desc/service-name ~target-ns
+        ::service-desc/attributes {}
+        ::call-desc/target-ns ~target-ns
+        ::call-desc/fn-name ~fn-name
+        ::call-desc/fn-args ~args}))
 
   ([service-namespace attributes call-list]
     (let [service-name (name service-namespace)
@@ -227,31 +207,31 @@
           target-ns (first ns-fn-coll)
           fn-name (last ns-fn-coll)
           args (vec (rest call-list))]
-      `(vector
-          {:service-name ~service-name
-           :attributes ~attributes}
-          {:target-ns ~target-ns
-           :fn-name ~fn-name
-           :fn-args ~args}))))
+      `{::service-desc/service-name ~service-name
+        ::service-desc/attributes ~attributes
+        ::call-desc/target-ns ~target-ns
+        ::call-desc/fn-name ~fn-name
+        ::call-desc/fn-args ~args})))
 
 (defmacro async
   ([ch finder call-list options]
-   `(let [[service-desc# call-desc#] (parse-call-list ~call-list)]
-      (async-fn ~ch ~finder service-desc# call-desc# ~options)))
+   `(let [call-info# (merge (parse-call-list ~call-list) ~options)]
+      (async-fn ~ch ~finder call-info#)))
 
   ([finder call-list options]
     `(async (chan) ~finder ~call-list ~options))
 
   ([ch finder service-namespace attributes call-list options]
-   `(let [[service-desc# call-desc#] (parse-call-list ~service-namespace ~attributes ~call-list)]
-      (async-fn ~ch ~finder service-desc# call-desc# ~options)))
+   `(let [call-info# (merge (parse-call-list ~service-namespace ~attributes ~call-list)
+                              ~options)]
+      (async-fn ~ch ~finder call-info#)))
 
   ([finder service-namespace attributes call-list options]
     `(async (chan) ~finder ~service-namespace ~attributes ~call-list ~options)))
 
 (defn handle-exception
   [boxed-result & finders]
-  (when-let [{:keys [service service-descriptor]} (service-info boxed-result)]
+  (when-let [{:keys [service service-descriptor]} (boxed/service-info boxed-result)]
     (doseq [finder finders]
       (finder/remove-service finder service-descriptor service))))
 
@@ -291,15 +271,13 @@
 (s/fdef try-call
   :args (s/cat :ch :async/channel
                :finder :crow/service-finder
-               :service-desc ::service-descriptor
-               :call-desc ::call-descriptor
-               :call-opts ::discovery-options)
+               :call-info ::async-call-info)
   :ret  any?)
 
 (defn try-call
-  [ch finder service-desc call-desc options]
+  [ch finder call-info]
   (try
-    (async-fn* ch finder service-desc call-desc options)
+    (async-fn* ch finder call-info)
     (loop [result [] sequential-result? false]
       (if-let [boxed-data (<!! ch)]
         (let [msg @boxed-data]
@@ -322,30 +300,28 @@
 
 (defmacro call
   ([ch finder call-list opts]
-    `(let [[service-desc# call-desc#] (parse-call-list ~call-list)]
-        (try-call ~ch ~finder service-desc# call-desc# ~opts)))
+   `(let [call-info# (merge (parse-call-list ~call-list)
+                            ~opts)]
+        (try-call ~ch ~finder call-info#)))
 
   ([finder call-list opts]
-    `(call (chan) ~finder ~call-list ~opts))
+   `(call (chan) ~finder ~call-list ~opts))
 
   ([ch finder service-namespace attributes call-list opts]
-    `(let [[service-desc# call-desc#] (parse-call-list ~service-namespace ~attributes ~call-list)]
-        (log/debug (str "service-desc: " (pr-str service-desc#)))
-        (log/debug (str "call-desc: " (pr-str call-desc#)))
-        (try-call ~ch ~finder service-desc# call-desc# ~opts)))
+   `(let [call-info# (merge (parse-call-list ~service-namespace ~attributes ~call-list)
+                            ~opts)]
+      (log/debug (str "call-info: " (pr-str call-info#)))
+      (try-call ~ch ~finder call-info#)))
 
   ([finder service-namespace attributes call-list opts]
-    `(call (chan) ~finder ~service-namespace ~attributes ~call-list ~opts)))
+   `(call (chan) ~finder ~service-namespace ~attributes ~call-list ~opts)))
 
 (defmacro with-service
   ([ch factory service call-list opts]
-   `(let [[service-desc# call-desc#] (parse-call-list ~call-list)]
-      (invoke ~ch ~factory service-desc# ~service call-desc# ~opts)))
+   `(let [invoke-info# (merge (parse-call-list ~call-list)
+                              ~opts
+                              ~service)]
+      (invoke ~ch ~factory invoke-info#)))
 
   ([factory service call-list opts]
     `(with-service (chan) ~factory ~service ~call-list ~opts)))
-
-
-
-
-

@@ -8,17 +8,25 @@
             [crow.registrar-source :as source]
             [crow.service :as service]
             [crow.service-finder :refer [reset-registrars! abandon-registrar!] :as finder]
-            [crow.spec :as crow-spec]
             [crow.logging :refer [trace-pr info-pr]]
+            [crow.service-descriptor :as service-desc]
+            [crow.call-options :as call-opts]
+            [crow.discovery.service :as service-info]
+            [crow.utils :refer [assoc-key-ns select-ns-keys]]
             [async-connect.box :refer [boxed]]))
+
+
+(s/def ::discovery-info
+  (s/keys :req [::service-desc/service-name
+                ::service-desc/attributes
+                ::call-opts/timeout-ms]))
 
 
 (defn- discover-with
   [{::finder/keys [connection-factory] :as finder}
    {:keys [address port] :as registrar}
-   {:keys [service-name attributes] :as service-desc}
-   {:keys [timeout-ms] :as options}]
-  (trace-pr "options:" options)
+   {::service-desc/keys [service-name attributes]
+    ::call-opts/keys [timeout-ms] :as discovery-info}]
   (let [req     (discovery service-name attributes)
         result  (try
                   (let [data #::request{:connection-factory connection-factory
@@ -34,7 +42,9 @@
                       (service-found? msg)
                       (do
                         (trace-pr "service-found: " msg)
-                        (vec (:services msg)))
+                        (->> (:services msg)
+                             (map #(assoc-key-ns % :crow.discovery.service))
+                             (vec)))
 
                       (service-not-found? msg)
                       nil
@@ -53,16 +63,17 @@
                     (log/error th "An error occured when sending a discovery request.")
                     (abandon-registrar! finder registrar)
                     (throw th)))]
-    (s/assert ::crow-spec/found-services result)
-    (finder/reset-services finder service-desc result)
+    (s/assert (s/coll-of :crow.discovery/service) result)
+    (finder/reset-services finder
+                           (select-ns-keys discovery-info :crow.service-descriptor)
+                           result)
     result))
 
 (defn discover
   [{::finder/keys [active-registrars registrar-source] :as finder}
-   {:keys [service-name attributes] :as service-desc}
-   options]
+   discovery-info]
   ;; find services from a cache if finder has a cache.
-  (if-let [services (seq (finder/find-services finder service-desc))]
+  (if-let [services (seq (finder/find-services finder (select-ns-keys discovery-info :crow.service-descriptor)))]
     services
     (do
       (when-not (seq @active-registrars)
@@ -73,6 +84,5 @@
             result result
             (not (seq regs)) (throw (ex-info "Service Not Found." {:type ::service-not-found, :source registrar-source}))
             :else (let [reg (first regs)]
-                    (recur (rest regs) (discover-with finder reg service-desc options)))))
+                    (recur (rest regs) (discover-with finder reg discovery-info)))))
         (throw (ex-info "Registrar doesn't exist." {:type ::registrar-doesnt-exist, :source registrar-source}))))))
-

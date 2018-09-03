@@ -7,6 +7,7 @@
             [msgpack.core :refer [pack unpack refine-ext] :as msgpack]
             [crow.logging :refer [trace-pr]]
             [crow.protocol :refer [call-result? sequential-item-start? sequential-item-end? sequential-item?]]
+            [async-connect.message :as message]
             [async-connect.client :refer [connect] :as async-connect]
             [async-connect.box :refer [boxed] :as box]
             [async-connect.spec :as async-spec])
@@ -51,7 +52,7 @@
   [data]
   (when data (unpack-message data)))
 
-(def packer (map #(update % :message pack)))
+(def packer (map #(update % ::message/data pack)))
 (def unpacker (map #(box/update % read-message)))
 
 (defn- initialize-channel
@@ -136,7 +137,7 @@
     (go
       (try
         (let [{::async-connect/keys [write-ch] :as conn} (client connection-factory address port)
-              result (case (write-with-timeout write-ch {:message data :flush? true} timeout-ms)
+              result (case (write-with-timeout write-ch #::message{:data data :flush? true} timeout-ms)
                        false
                        (throw (ConnectException. (str "Couldn't send a message: " (pr-str data))))
 

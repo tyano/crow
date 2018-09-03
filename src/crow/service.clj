@@ -1,6 +1,7 @@
 (ns crow.service
   (:require [async-connect.server :refer [run-server close-wait] :as async-server]
             [async-connect.box :refer [boxed]]
+            [async-connect.message :as message]
             [clojure.spec.alpha :as s]
             [clojure.core.async :refer [chan go-loop thread <! >! <!! >!! alt! alts! alt!! timeout]]
             [crow.protocol :refer [remote-call? ping? invalid-message protocol-error call-result
@@ -158,8 +159,8 @@
       (if (iterable? r)
         (do
           (send-one-data!! write-ch
-                           {:message (sequential-item-start)
-                            :flush? false}
+                           #::message{:data (sequential-item-start)
+                                      :flush? false}
                            timeout-ms)
 
           (loop [items r write-count 0]
@@ -168,8 +169,8 @@
               (do
                 (trace-pr "remote-call response:" item)
                 (when (send-one-data!! write-ch
-                                       {:message (sequential-item item)
-                                        :flush? (>= write-count 10)}
+                                       #::message{:data (sequential-item item)
+                                                  :flush? (>= write-count 10)}
                                        timeout-ms)
                   (recur (rest items) (if (>= write-count 10) 0 (inc write-count)))))
 
@@ -177,18 +178,19 @@
               (let [resp (sequential-item-end)]
                 (trace-pr "remote-call response:" resp)
                 (send-one-data!! write-ch
-                                 {:message resp
-                                  :flush? true}
+                                 #::message{:data resp
+                                            :flush? true}
                                  timeout-ms)))))
 
         (do
           (trace-pr "remote-call response:" r)
-          (send-one-data!! write-ch {:message (call-result r) :flush? true} timeout-ms))))
+          (send-one-data!! write-ch #::message{:data (call-result r) :flush? true} timeout-ms))))
 
     (send-one-data!! write-ch
-                     {:message (protocol-error error-target-not-found
-                                               (format "the fn %s/%s is not found." target-ns fn-name))}
-                     :flush? true)))
+                     #::message{:data (protocol-error error-target-not-found
+                                               (format "the fn %s/%s is not found." target-ns fn-name))
+                                :flush? true}
+                     timeout-ms)))
 
 
 (defn- handle-request
@@ -197,13 +199,13 @@
     (ping? msg)
     (do
       (log/trace "received a ping.")
-      (send-one-data!! write-ch {:message (ack) :flush? true} timeout-ms))
+      (send-one-data!! write-ch #::message{:data (ack) :flush? true} timeout-ms))
 
     (remote-call? msg)
     (handle-remote-call handler-map write-params msg)
 
     :else
-    (send-one-data!! write-ch {:message (invalid-message msg) :flush? true} timeout-ms)))
+    (send-one-data!! write-ch #::message{:data (invalid-message msg) :flush? true} timeout-ms)))
 
 
 (defn- make-service-handler
@@ -228,7 +230,7 @@
                   (catch Throwable ex
                     (log/error ex "An Error ocurred.")
                     (alt!
-                      [[write-ch {:message (make-call-exception ex) :flush? true}]]
+                      [[write-ch #::message{:data (make-call-exception ex) :flush? true}]]
                       ([v ch] v)
 
                       [(if timeout-ms (timeout timeout-ms) (chan))]

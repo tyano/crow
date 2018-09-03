@@ -9,6 +9,7 @@
             [clj-time.core :refer [now after? plus millis] :as t]
             [async-connect.server :refer [run-server close-wait] :as async-server]
             [async-connect.box :refer [boxed]]
+            [async-connect.message :as message]
             [crow.protocol :refer [lease lease-expired registration invalid-message
                                    join-request? heart-beat? discovery? ping?
                                    protocol-error ack call-exception
@@ -187,7 +188,7 @@
       (when-let [msg (<! read-ch)]
         (when (try
                 (let [result (<! (thread (handle-request registrar @msg)))
-                      resp   {:message @result :flush? true}]
+                      resp   #::message{:data @result :flush? true}]
                   (if timeout-ms
                     (alt!
                       [[write-ch resp]]
@@ -202,7 +203,7 @@
                   (log/error ex "An Error ocurred.")
                   (let [[type throwable] (extract-exception ex)
                         ex-msg (call-exception type (format-stack-trace throwable))]
-                    (alts! [[write-ch {:message ex-msg :flush? true}] (timeout timeout-ms)])
+                    (alts! [[write-ch #::message{:data ex-msg :flush? true}] (timeout timeout-ms)])
                     false)))
           (recur))))))
 

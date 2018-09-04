@@ -89,8 +89,8 @@
 
 (defn reset-registrars!
   [{::keys [registrar-source
-                          dead-registrars
-                          active-registrars]}]
+            dead-registrars
+            active-registrars]}]
   (let [new-registrars (source/registrars registrar-source)]
     (dosync
       (alter active-registrars
@@ -148,32 +148,35 @@
   (find-services [finder service-desc] nil))
 
 
+(s/def ::service-map map?)
+(s/def ::time-cache map?)
+(s/def ::cache-data
+  (s/keys :req-un [::service-map ::time-cache]))
+
 (defrecord CachedServiceFinder
-  [service-map time-cache]
+  [cache-data]
 
   StoppableFinder
   (stop-finder
     [finder]
     (stop-finder* finder)
-    (dosync
-     (ref-set service-map {})
-     (ref-set time-cache {}))
+    (reset! cache-data {:service-map {} :time-cache {}})
     nil)
 
   ServiceCache
   (clear-cache
     [finder]
-    (dosync
-     (ref-set service-map {})
-     (ref-set time-cache {}))
+    (reset! cache-data {:service-map {} :time-cache {}})
     finder)
 
   (remove-service
     [finder service-desc service]
     (when (and service-desc service)
-      (dosync
-       (alter service-map update service-desc (fn [services] (set (filter #(not= (:service-id service) (:service-id %)) services))))
-       (alter time-cache dissoc (:service-id service))))
+      (swap! cache-data
+             (fn [data]
+               (-> data
+                   (update-in [:service-map service-desc] (fn [services] (set (filter #(not= (:service-id service) (:service-id %)) services))))
+                   (update :time-cache dissoc (:service-id service))))))
     finder)
 
   (reset-services
@@ -181,61 +184,66 @@
     (when service-desc
       (trace-pr "reset-services - service-desc : services: " [service-desc service-coll])
       (s/assert (s/coll-of :crow.discovery/service) service-coll)
-      (dosync
-       (let [old-services (get @service-map service-desc [])]
-         (alter service-map assoc service-desc (set service-coll))
-         (alter time-cache
-                (fn [cache]
-                  (let [reset-cache (reduce #(dissoc %1 (:service-id %2))
-                                            cache
-                                            old-services)]
-                    (reduce
-                     #(assoc %1 (:service-id %2) (Date.))
-                     reset-cache
-                     (distinct service-coll))))))))
+      (swap! cache-data
+             (fn [data]
+               (let [old-services (get-in data [:service-map service-desc] [])]
+                 (-> data
+                     (assoc-in [:service-map service-desc] (set service-coll))
+                     (update :time-cache
+                             (fn [cache]
+                               (let [reset-cache (reduce #(dissoc %1 (:service-id %2))
+                                                         cache
+                                                         old-services)]
+                                 (reduce
+                                  #(assoc %1 (:service-id %2) (Date.))
+                                  reset-cache
+                                  (distinct service-coll))))))))))
     finder)
 
   (add-services
     [finder service-desc service-coll]
     (when (and service-desc (seq service-coll))
       (s/assert (s/coll-of :crow.discovery/service) service-coll)
-      (dosync
-       (ref-set service-map update service-desc #(apply conj (or % #{}) service-coll))
-
-       (ref-set time-cache (fn [cache]
+      (swap! cache-data
+             (fn [data]
+               (-> data
+                   (update-in [:service-map service-desc] #(apply conj (or % #{}) service-coll))
+                   (update :time-cache
+                           (fn [cache]
                              (reduce
                               #(assoc %1 (:service-id %2) (Date.))
                               cache
-                              (distinct service-coll))))))
+                              (distinct service-coll))))))))
     finder)
 
   (find-services
     [finder service-desc]
     (when service-desc
-      (let [services (get @service-map service-desc)]
+      (let [services (get-in @cache-data [:service-map service-desc])]
         (debug-pr "find-services - service-desc : found-services: " [service-desc services])
         services))))
 
 
 (s/fdef remove-service-from-cache
-    :args (s/cat :finder :crow/service-finder
-                 :service :crow.discovery/service)
-    :ret map?)
+  :args (s/cat :cache-data ::cache-data
+               :service :crow.discovery/service)
+  :ret map?)
 
 (defn- remove-service-from-cache
-  [finder service]
+  [cache-data service]
   (log/debug "removing a service... : " (pr-str service))
-  (dosync
-   (alter (:service-map finder)
-          (fn [service-map]
-            (into {}
-                  (map
-                    (fn [[service-desc service-coll]]
-                      [service-desc (set (filter #(not= (:service-id service) (:service-id %)) service-coll))])
-                    service-map))))
-   (alter (:time-cache finder) dissoc (:service-id service)))
-  (log/debug (str "service " service " now is removed from service-cache"))
-  nil)
+  (let [result
+        (-> cache-data
+            (update :service-map
+                    (fn [service-map]
+                      (into {}
+                            (map
+                             (fn [[service-desc service-coll]]
+                               [service-desc (set (filter #(not= (:service-id service) (:service-id %)) service-coll))])
+                             service-map))))
+            (update :time-cache dissoc (:service-id service)))]
+    (log/debug (str "service " service " now is removed from service-cache"))
+    result))
 
 
 (s/fdef check-cached-services
@@ -244,20 +252,20 @@
 
 (defn- check-cached-services
   [finder cache-timeout-ms]
-  (let [expired-services
-        (dosync
-         (let [service-map (ensure (:service-map finder))
-               time-cache  (ensure (:time-cache finder))
-               services    (distinct (apply concat (vals service-map)))]
-           (->> (for [service services]
-                  (let [time (get time-cache (:service-id service))
-                        _    (assert (some? time))
-                        diff (- (.. (Date.) (getTime)) (.. time (getTime)))]
-                    (when (> diff cache-timeout-ms) service)))
-                (filter some?)
-                (doall))))]
-    (doseq [service expired-services]
-      (remove-service-from-cache finder service))))
+  (swap! (:cache-data finder)
+         (fn [{:keys [service-map time-cache] :as data}]
+           (let [expired-services
+                 (let [services (distinct (apply concat (vals service-map)))]
+                   (->> (for [service services]
+                          (let [time (get time-cache (:service-id service))
+                                _    (assert (some? time))
+                                diff (- (.. (Date.) (getTime)) (.. time (getTime)))]
+                            (when (> diff cache-timeout-ms) service)))
+                        (filter some?)))]
+             (reduce
+                #(remove-service-from-cache %1 %2)
+                data
+                expired-services)))))
 
 (defn start-check-cached-services-task
   "Check the activity of cached services and if services are down, remove the services from a cache."
@@ -273,11 +281,8 @@
 (defn cached-service-finder
   [connection-factory registrar-source check-interval-ms cache-timeout-ms]
   {:pre [registrar-source]}
-  (let [finder (-> (->CachedServiceFinder (ref {}) (ref {}))
+  (let [finder (-> (->CachedServiceFinder (atom {:service-map {}, :time-cache {}}))
                    (assoc ::connection-factory connection-factory)
                    (init-service-finder registrar-source))]
     (start-check-cached-services-task finder check-interval-ms cache-timeout-ms)
     finder))
-
-
-

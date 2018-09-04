@@ -148,15 +148,6 @@
   (find-services [finder service-desc] nil))
 
 
-(s/def ::service
-  (s/keys :req-un []))
-
-(s/def :cache/time inst?)
-(s/def ::cache-info
-  (s/keys :req
-          [:cache/service
-           :cache/time]))
-
 (defrecord CachedServiceFinder
   [service-map time-cache]
 
@@ -181,7 +172,7 @@
     [finder service-desc service]
     (when (and service-desc service)
       (dosync
-       (alter service-map update service-desc disj service)
+       (alter service-map update service-desc (fn [services] (set (filter #(not= (:service-id service) (:service-id %)) services))))
        (alter time-cache dissoc (:service-id service))))
     finder)
 
@@ -233,13 +224,14 @@
 
 (defn- remove-service-from-cache
   [finder service]
+  (log/debug "removing a service... : " (pr-str service))
   (dosync
    (alter (:service-map finder)
           (fn [service-map]
             (into {}
                   (map
                     (fn [[service-desc service-coll]]
-                      [service-desc (set (filter #(not= service %) service-coll))])
+                      [service-desc (set (filter #(not= (:service-id service) (:service-id %)) service-coll))])
                     service-map))))
    (alter (:time-cache finder) dissoc (:service-id service)))
   (log/debug (str "service " service " now is removed from service-cache"))
@@ -252,13 +244,18 @@
 
 (defn- check-cached-services
   [finder cache-timeout-ms]
-  (let [service-map      @(:service-map finder)
-        services         (distinct (apply concat (vals service-map)))
-        expired-services (->> (for [service services]
-                                (let [time (get @(:time-cache finder) (:service-id service) (Date.))
-                                      diff (- (.. (Date.) (getTime)) (.. time (getTime)))]
-                                  (when (> diff cache-timeout-ms) service)))
-                              (filter some?))]
+  (let [expired-services
+        (dosync
+         (let [service-map (ensure (:service-map finder))
+               time-cache  (ensure (:time-cache finder))
+               services    (distinct (apply concat (vals service-map)))]
+           (->> (for [service services]
+                  (let [time (get time-cache (:service-id service))
+                        _    (assert (some? time))
+                        diff (- (.. (Date.) (getTime)) (.. time (getTime)))]
+                    (when (> diff cache-timeout-ms) service)))
+                (filter some?)
+                (doall))))]
     (doseq [service expired-services]
       (remove-service-from-cache finder service))))
 

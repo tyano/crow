@@ -6,7 +6,6 @@
             [crow.protocol :refer [discovery service-found? service-not-found? call-exception?]]
             [crow.request :as request]
             [crow.registrar-source :as source]
-            [crow.service :as service]
             [crow.service-finder :refer [reset-registrars! abandon-registrar!] :as finder]
             [crow.logging :refer [trace-pr info-pr]]
             [crow.service-descriptor :as service-desc]

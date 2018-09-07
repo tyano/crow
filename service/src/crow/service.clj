@@ -1,9 +1,12 @@
 (ns crow.service
-  (:require [async-connect.server :refer [run-server close-wait] :as async-server]
-            [async-connect.box :refer [boxed]]
-            [async-connect.message :as message]
+  (:require [clojure.string :refer [index-of]]
             [clojure.spec.alpha :as s]
             [clojure.core.async :refer [chan go-loop thread <! >! <!! >!! alt! alts! alt!! timeout]]
+            [clojure.tools.logging :as log]
+            [async-connect.server :refer [run-server close-wait] :as async-server]
+            [async-connect.box :refer [boxed]]
+            [async-connect.message :as message]
+            [async-connect.pool :refer [pooled-connection-factory]]
             [crow.protocol :refer [remote-call? ping? invalid-message protocol-error call-result
                                    sequential-item-start sequential-item-start?
                                    sequential-item sequential-item?
@@ -11,14 +14,10 @@
                                    call-exception ack] :as p]
             [crow.request :refer [frame-decorder format-stack-trace packer unpacker] :as request]
             [crow.join-manager :refer [start-join-manager stop-join-manager join]]
-            [clojure.tools.logging :as log]
             [crow.logging :refer [trace-pr]]
             [crow.registrar-source :refer [static-registrar-source]]
             [crow.id-store :refer [->FileIdStore] :as id]
-            [crow.utils :refer [extract-exception]]
-            [async-connect.pool :refer [pooled-connection-factory]]
-            [crow.request :as request]
-            [clojure.string :refer [index-of]])
+            [crow.utils :refer [extract-exception]])
   (:import [io.netty.handler.codec.bytes
               ByteArrayDecoder
               ByteArrayEncoder]

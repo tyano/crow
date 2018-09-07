@@ -14,10 +14,8 @@
                                    join-request? heart-beat? discovery? ping?
                                    protocol-error ack call-exception
                                    service-found service-not-found] :as p]
-            [crow.request :refer [frame-decorder format-stack-trace packer unpacker] :as request]
-            [crow.service :as sv]
+            [crow.request :refer [frame-decorder format-stack-trace packer unpacker write-with-timeout read-with-timeout] :as request]
             [crow.registrar.service :refer [new-service-info] :as service-info]
-            [crow.request :refer [write-with-timeout read-with-timeout]]
             [crow.logging :refer [trace-pr debug-pr info-pr]]
             [crow.utils :refer [extract-exception]])
   (:import [java.util UUID]

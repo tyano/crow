@@ -4,11 +4,11 @@
             [crow.registrar-source :as source]
             [crow.request :as request]
             [crow.id-store :refer [write]]
+            [crow.logging :refer [trace-pr debug-pr]]
             [clojure.core.async :refer [chan close! go-loop <! >! timeout <!! >!! onto-chan go] :as async]
             [clojure.set :refer [difference select] :as st]
             [clojure.tools.logging :as log]
             [clj-time.core :refer [now plus after? millis] :as t]
-            [crow.logging :refer [trace-pr debug-pr]]
             [async-connect.box :refer [boxed]])
   (:import [java.net
             InetAddress

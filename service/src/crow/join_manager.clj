@@ -102,7 +102,7 @@
 (defn- reset-registrars!
   [join-mgr registrars]
   (dosync
-    (alter (:registrars join-mgr) (fn [_] (difference (set registrars) @(:dead-registrars join-mgr))))))
+   (alter (:registrars join-mgr) (fn [_] (difference (set registrars) (ensure (:dead-registrars join-mgr)))))))
 
 (defn- registrar-revived!
   [join-mgr registrar]
@@ -247,18 +247,19 @@
       (do
         (try
           (when-let [service (<! service-ch)]
-            (let [[joined-registrars registrars] (dosync [@(:registrars service) @(:registrars join-mgr)])
-                  joined      (map #(dissoc % :expire-at) joined-registrars)
-                  not-joined  (difference registrars joined)]
-              (try
-                (if (seq not-joined)
-                  (let [join-req (for [reg not-joined] {:service service, :registrar reg})]
-                    (trace-pr "join targets:" not-joined)
-                    (onto-chan join-ch join-req false))
-                  (log/trace "There are no join targets!"))
-                (finally
-                  (dosync
-                    (alter (:managed-services join-mgr) conj service))))))
+            (dosync
+             (let [joined-registrars (ensure (:registrars service))
+                   registrars        (ensure (:registrars join-mgr))
+                   joined            (map #(dissoc % :expire-at) joined-registrars)
+                   not-joined        (difference registrars joined)]
+               (try
+                 (if (seq not-joined)
+                   (let [join-req (for [reg not-joined] {:service service, :registrar reg})]
+                     (trace-pr "join targets:" not-joined)
+                     (onto-chan join-ch join-req false))
+                   (log/trace "There are no join targets!"))
+                 (finally
+                   (alter (:managed-services join-mgr) conj service))))))
           (catch Throwable e
             (log/error e "service-acceptor error.")))
         (recur)))))
@@ -286,11 +287,10 @@
       (do
         (try
           (doseq [[service reg]
-                    (dosync
                       (for [service @(:managed-services join-mgr)
                             {:keys [expire-at] :as reg} @(:registrars service)
                             :when (after? (plus (now) (millis heart-beat-buffer-ms)) expire-at)]
-                        [service reg]))]
+                        [service reg])]
             (log/trace "send heart-beat from" (pr-str service) "to" (pr-str reg))
             (go
               (try

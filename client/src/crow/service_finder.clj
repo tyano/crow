@@ -93,9 +93,10 @@
             active-registrars]}]
   (let [new-registrars (source/registrars registrar-source)]
     (dosync
-      (alter active-registrars
-        (fn [_]
-          (difference (set new-registrars) @dead-registrars))))))
+     (let [dead-regs (ensure dead-registrars)]
+       (alter active-registrars
+              (fn [_]
+                (difference (set new-registrars) dead-regs)))))))
 
 (defn abandon-registrar!
   [{::keys [dead-registrars active-registrars]} reg]

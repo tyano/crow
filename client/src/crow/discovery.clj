@@ -74,14 +74,16 @@
   ;; find services from a cache if finder has a cache.
   (if-let [services (seq (finder/find-services finder (select-ns-keys discovery-info :crow.service-descriptor)))]
     services
-    (do
-      (when-not (seq @active-registrars)
-        (reset-registrars! finder))
-      (if-let [registrars (seq @active-registrars)]
-        (loop [regs (shuffle registrars) result nil]
-          (cond
-            result result
-            (not (seq regs)) (throw (ex-info "Service Not Found." {:type ::service-not-found, :source registrar-source}))
-            :else (let [reg (first regs)]
-                    (recur (rest regs) (discover-with finder reg discovery-info)))))
-        (throw (ex-info "Registrar doesn't exist." {:type ::registrar-doesnt-exist, :source registrar-source}))))))
+    (if-let [registrars (seq (dosync
+                              (if-let [registrars (not-empty (ensure active-registrars))]
+                                registrars
+                                (do
+                                  (reset-registrars! finder)
+                                  (ensure active-registrars)))))]
+      (loop [regs (shuffle registrars) result nil]
+        (cond
+          result result
+          (not (seq regs)) (throw (ex-info "Service Not Found." {:type ::service-not-found, :source registrar-source}))
+          :else (let [reg (first regs)]
+                  (recur (rest regs) (discover-with finder reg discovery-info)))))
+      (throw (ex-info "Registrar doesn't exist." {:type ::registrar-doesnt-exist, :source registrar-source})))))

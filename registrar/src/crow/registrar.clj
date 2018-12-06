@@ -8,8 +8,8 @@
             [clojure.set :refer [superset?]]
             [clj-time.core :refer [now after? plus millis] :as t]
             [async-connect.server :refer [run-server close-wait] :as async-server]
-            [async-connect.box :refer [boxed]]
             [async-connect.message :as message]
+            [box.core :as box]
             [crow.protocol :refer [lease lease-expired registration invalid-message
                                    join-request? heart-beat? discovery? ping?
                                    protocol-error ack call-exception
@@ -150,7 +150,7 @@
 
 (defn- handle-request
   [registrar msg]
-  (boxed
+  (box/value
     (try
       (cond
         (ping? msg)         (do (log/trace "received a ping.") (ack))

@@ -4,9 +4,9 @@
             [clojure.core.async :refer [chan go-loop thread <! >! <!! >!! alt! alts! alt!! timeout]]
             [clojure.tools.logging :as log]
             [async-connect.server :refer [run-server close-wait] :as async-server]
-            [async-connect.box :refer [boxed]]
             [async-connect.message :as message]
             [async-connect.pool :refer [pooled-connection-factory]]
+            [box.core :as box]
             [crow.protocol :refer [remote-call? ping? invalid-message protocol-error call-result
                                    sequential-item-start sequential-item-start?
                                    sequential-item sequential-item?
@@ -217,7 +217,7 @@
         (when-let [msg (<! read-ch)]
           (when (try
                   (let [result (<! (thread
-                                     (boxed
+                                     (box/value
                                       (try
                                         (if middleware
                                           (let [wrapper-fn (middleware (partial handle-request handler-map write-params))]

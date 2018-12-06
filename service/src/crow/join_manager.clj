@@ -9,7 +9,7 @@
             [clojure.set :refer [difference select] :as st]
             [clojure.tools.logging :as log]
             [clj-time.core :refer [now plus after? millis] :as t]
-            [async-connect.box :refer [boxed]])
+            [box.core :as box])
   (:import [java.net
             InetAddress
             Inet4Address
@@ -162,7 +162,7 @@
                       (catch Throwable e
                         (registrar-died! join-mgr service registrar)
                         e))]
-        (>! result-ch (boxed result))))
+        (>! result-ch (box/value result))))
     result-ch))
 
 (declare join)
@@ -208,7 +208,7 @@
                       (catch Throwable e
                         (registrar-died! join-mgr service registrar)
                         e))]
-        (>! result-ch (boxed result))))
+        (>! result-ch (box/value result))))
     result-ch))
 
 
@@ -323,7 +323,7 @@
     (if @should-stop
       (do
         (log/info "dead-registrar-checker stopped.")
-        (boxed nil))
+        (box/value nil))
       (do
         (doseq [{:keys [address port] :as registrar} @(:dead-registrars join-mgr)]
           (try
@@ -338,10 +338,10 @@
                (ack? resp)
                (do
                  (log/info "A registrar revived: " (pr-str registrar))
-                 (boxed (registrar-revived! join-mgr registrar)))
+                 (box/value (registrar-revived! join-mgr registrar)))
 
                :else
-               (boxed nil)))
+               (box/value nil)))
             (catch Throwable th
               ;; dead-registrar-checker usually get an error when checking registrars,
               ;; because the purpose of this thread is accessing to 'dead' registrars for checking
@@ -349,7 +349,7 @@
               ;; So if we print the error with ERROR level, verbose error logs will be printed.
               ;; It should be printed only in debugging time.
               (log/debug th "dead-registrar-checker error.")
-              (boxed nil))))
+              (box/value nil))))
         (<! (timeout dead-registrar-check-interval))
         (recur)))))
 

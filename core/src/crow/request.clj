@@ -9,8 +9,8 @@
             [crow.protocol :refer [call-result? sequential-item-start? sequential-item-end? sequential-item?]]
             [async-connect.message :as message]
             [async-connect.client :refer [connect] :as async-connect]
-            [async-connect.box :refer [boxed] :as box]
-            [async-connect.spec :as async-spec])
+            [async-connect.spec :as async-spec]
+            [box.core :as box])
   (:import [com.shelf.messagepack MessagePackFrameDecoder]
            [msgpack.core Ext]
            [java.net ConnectException]
@@ -53,7 +53,7 @@
   (when data (unpack-message data)))
 
 (def packer (map #(update % ::message/data pack)))
-(def unpacker (map #(box/update % read-message)))
+(def unpacker (box/map read-message))
 
 (defn- initialize-channel
   [netty-ch config]
@@ -146,11 +146,11 @@
 
                        conn)]
 
-          (>! result-ch (boxed result))
+          (>! result-ch (box/value result))
           nil)
 
         (catch Throwable th
-          (>! result-ch (boxed th))
+          (>! result-ch (box/value th))
           nil)))
 
     result-ch))
@@ -172,41 +172,42 @@
       (try
         (if-let [{::async-connect/keys [read-ch] :as conn} @(<! (try-send send-data))]
           (try
-            (loop [msg (read-with-timeout read-ch timeout-ms)]
-              (cond
-                (= msg ::timeout)
-                (do
-                  (log/error (str "Timeout: Couldn't receive a response for a data: " (pr-str data)))
-                  (async-connect/close conn true)
-                  (>! result-ch (boxed ::timeout))
-                  (close! result-ch))
+            (loop []
+              (let [msg (read-with-timeout read-ch timeout-ms)]
+                (cond
+                  (= msg ::timeout)
+                  (do
+                    (log/error (str "Timeout: Couldn't receive a response for a data: " (pr-str data)))
+                    (async-connect/close conn true)
+                    (>! result-ch (box/value ::timeout))
+                    (close! result-ch))
 
-                (nil? msg)
-                (do
-                  (log/error (str "Drained: Peer closed: data: " (pr-str data)))
-                  (>! result-ch (boxed nil))
-                  (close! result-ch))
+                  (nil? msg)
+                  (do
+                    (log/error (str "Drained: Peer closed: data: " (pr-str data)))
+                    (>! result-ch (box/value nil))
+                    (close! result-ch))
 
-                (or (sequential-item-start? msg)
-                    (sequential-item? msg))
-                (do
-                  (>! result-ch (boxed msg))
-                  (recur (read-with-timeout read-ch timeout-ms)))
+                  (or (sequential-item-start? msg)
+                      (sequential-item? msg))
+                  (do
+                    (>! result-ch (box/value msg))
+                    (recur))
 
-                (sequential-item-end? msg)
-                (do
-                  (>! result-ch (boxed msg))
-                  (close! result-ch))
+                  (sequential-item-end? msg)
+                  (do
+                    (>! result-ch (box/value msg))
+                    (close! result-ch))
 
-                (call-result? msg)
-                (do
-                  (>! result-ch (boxed msg))
-                  (close! result-ch))
+                  (call-result? msg)
+                  (do
+                    (>! result-ch (box/value msg))
+                    (close! result-ch))
 
-                :else
-                (do
-                  (>! result-ch (boxed msg))
-                  (close! result-ch))))
+                  :else
+                  (do
+                    (>! result-ch (box/value msg))
+                    (close! result-ch)))))
 
             (finally
               (async-connect/close conn)))
@@ -214,7 +215,7 @@
           (close! result-ch))
 
         (catch Throwable th
-          (>! result-ch (boxed th))
+          (>! result-ch (box/value th))
           (close! result-ch))))
 
     result-ch))

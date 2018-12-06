@@ -1,4 +1,4 @@
-(defproject crow "2.3-SNAPSHOT"
+(defproject crow "2.4-SNAPSHOT"
   :description "Crow is a library for building and collaborating with distributed services implemented by Clojure."
   :url "https://github.com/tyano/crow"
   :license {:name "Eclipse Public License"

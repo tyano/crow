@@ -1,4 +1,4 @@
-(defproject crow/client "2.3-SNAPSHOT"
+(defproject crow/client "2.4-SNAPSHOT"
   :license {:name "Eclipse Public License"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
   :dependencies [[org.clojure/clojure "_"]

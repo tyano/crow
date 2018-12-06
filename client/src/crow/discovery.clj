@@ -11,8 +11,7 @@
             [crow.service-descriptor :as service-desc]
             [crow.call-options :as call-opts]
             [crow.discovery.service :as service-info]
-            [crow.utils :refer [assoc-key-ns select-ns-keys]]
-            [async-connect.box :refer [boxed]]))
+            [crow.utils :refer [assoc-key-ns select-ns-keys]]))
 
 
 (s/def ::discovery-info

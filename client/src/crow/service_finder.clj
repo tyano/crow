@@ -8,7 +8,6 @@
             [crow.registrar-source :as source]
             [crow.logging :refer [trace-pr debug-pr info-pr]]
             [crow.discovery.service]
-            [async-connect.box :refer [boxed]]
             [async-connect.client :as client])
   (:import [java.util UUID Date]))
 

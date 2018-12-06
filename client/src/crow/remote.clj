@@ -1,10 +1,11 @@
 (ns crow.remote
   (:require [async-connect.client :as client]
+            [box.core :as box]
             [crow.protocol :refer [remote-call call-result?
                                    sequential-item-start? sequential-item? sequential-item-end?
                                    call-exception? protocol-error?]]
             [crow.request :as request]
-            [crow.boxed :refer [box value] :as boxed]
+            [crow.boxed :refer [with-service-info service-info]]
             [crow.discovery :refer [discover] :as discovery]
             [crow.discovery.service :as service-info]
             [crow.service-finder :refer [standard-service-finder] :as finder]
@@ -32,6 +33,49 @@
                 ::service-info/port
                 ::call-opts/timeout-ms]))
 
+
+(defn- handle-message
+  [msg]
+  (cond
+    (protocol-error? msg)
+    (throw (ex-info "Protocol Error."
+                    {:type       :protocol-error,
+                     :error-code (:error-code msg),
+                     :message    (:message msg)}))
+
+    (call-exception? msg)
+    (let [type-str    (:type msg)
+          stack-trace (:stack-trace msg)]
+      (throw
+       (ex-info "Remote function failed."
+                {:type        (keyword type-str)
+                 :stack-trace stack-trace})))
+
+    (sequential-item-start? msg)
+    (do
+      (log/debug "sequential-item-start")
+      [::sequential-item-start ::recur])
+
+    (sequential-item? msg)
+    (do
+      (log/trace "sequential-item")
+      [(:obj msg) ::recur])
+
+    (sequential-item-end? msg)
+    (do
+      (log/debug "sequential-item-end")
+      [::sequential-item-end ::end])
+
+    (call-result? msg)
+    [(:obj msg) ::end]
+
+    (= ::request/timeout msg)
+    (throw (TimeoutException.))
+
+    :else
+    (throw (ex-info (str "No such message format: " (pr-str msg)) {}))))
+
+
 (s/fdef invoke
   :args (s/cat :ch :async/channel
                :factory ::client/connection-factory
@@ -42,65 +86,40 @@
   [ch
    factory
    {::service-info/keys [address port]
-    ::call-desc/keys [target-ns fn-name fn-args]
-    ::call-opts/keys [timeout-ms] :as invoke-info}]
+    ::call-desc/keys    [target-ns fn-name fn-args]
+    ::call-opts/keys    [timeout-ms] :as invoke-info}]
 
   (log/trace "invoke")
   (let [data (remote-call target-ns fn-name fn-args)]
-    (go
-      (try
-        (let [send-data #::request{:connection-factory factory
-                                   :address address
-                                   :port port
-                                   :data data
-                                   :timeout-ms timeout-ms}
-              result-ch (request/send send-data)]
+    (try
+      (let [send-data #::request {:connection-factory factory
+                                  :address            address
+                                  :port               port
+                                  :data               data
+                                  :timeout-ms         timeout-ms}
+            result-ch (request/send send-data)]
 
-          (loop []
-            (when-let [result (<! result-ch)]
-              (let [msg @result]
-                (cond
-                  (protocol-error? msg)
-                  (>! ch (box (throw (ex-info "Protocol Error." {:type :protocol-error, :error-code (:error-code msg), :message (:message msg)}))))
+        (-> result-ch
+            (pipe
+             (chan 1
+                   (box/map
+                    (fn [msg]
+                      (let [[obj next-action] (handle-message msg)]
+                        (when (= next-action ::end)
+                          (close! result-ch))
+                        obj))
+                    {:throw? true})
+                   (fn [ex]
+                     (close! result-ch)
+                     (-> (box/value ex)
+                         (with-service-info invoke-info)))))
+            (pipe ch)))
 
-                  (call-exception? msg)
-                  (>! ch
-                      (box
-                        (let [type-str    (:type msg)
-                              stack-trace (:stack-trace msg)]
-                          (throw (ex-info "Remote function failed." {:type (keyword type-str) :stack-trace stack-trace})))))
-
-                  (sequential-item-start? msg)
-                  (do
-                    (log/debug "sequential-item-start")
-                    (>! ch (box ::sequential-item-start))
-                    (recur))
-
-                  (sequential-item? msg)
-                  (do
-                    (log/trace "sequential-item")
-                    (>! ch (box (:obj msg)))
-                    (recur))
-
-                  (sequential-item-end? msg)
-                  (do
-                    (log/debug "sequential-item-end")
-                    (>! ch (box ::sequential-item-end)))
-
-                  (call-result? msg)
-                  (>! ch (box (:obj msg)))
-
-                  (= ::request/timeout msg)
-                  (>! ch (box (TimeoutException.)))
-
-                  :else
-                  (>! ch (box (ex-info (str "No such message format: " (pr-str msg)) {})))))))
-
-          (close! result-ch)
-          (close! ch))
-
-        (catch Throwable th
-          (>! ch (box invoke-info th)))))
+      (catch Throwable th
+        (go
+          (>! ch (-> (box/value th)
+                     (with-service-info invoke-info)))
+          (close! ch))))
     ch))
 
 
@@ -161,7 +180,7 @@
       (try
         (loop [sequential-result? false]
           (when-let [boxed-data (<! fn-ch)]
-            (let [msg (value boxed-data)]
+            (let [msg @boxed-data]
               (log/trace "received message:" (pr-str msg))
               (cond
                 (= ::sequential-item-start msg)
@@ -179,7 +198,7 @@
                 (>! ch boxed-data)))))
 
         (catch Throwable th
-          (>! ch (box th)))
+          (>! ch (box/value th)))
         (finally
           (close! fn-ch)
           (close! ch))))
@@ -231,7 +250,7 @@
 
 (defn handle-exception
   [boxed-result & finders]
-  (when-let [{:keys [service service-descriptor]} (boxed/service-info boxed-result)]
+  (when-let [{:keys [service service-descriptor]} (service-info boxed-result)]
     (doseq [finder finders]
       (finder/remove-service finder service-descriptor service))))
 

@@ -7,5 +7,4 @@
                  [ns-tracker "0.3.1"]
                  [crow/core "_"]]
   :plugins [[lein-modules "0.3.11"]]
-  :profiles {:dev {:resource-paths ["resources-dev"]}
-             :uberjar {:aot :all}})
+  :profiles {:dev {:resource-paths ["resources-dev"]}})

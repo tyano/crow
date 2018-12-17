@@ -7,7 +7,6 @@
   :plugins [[lein-modules "0.3.11"]]
   :profiles {:dev {:resource-paths ["resources-dev"]}
              :logging {:dependencies [[ch.qos.logback/logback-classic "1.2.3"]]
-                       :resource-paths ["resources-logging"]}
-             :uberjar {:aot :all}}
+                       :resource-paths ["resources-logging"]}}
   :main crow.registrar
   )

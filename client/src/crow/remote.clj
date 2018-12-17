@@ -180,22 +180,24 @@
       (try
         (loop [sequential-result? false]
           (when-let [boxed-data (<! fn-ch)]
-            (let [msg @boxed-data]
-              (log/trace "received message:" (pr-str msg))
-              (cond
-                (= ::sequential-item-start msg)
-                (recur true)
+            (if (box/success? boxed-data)
+              (let [msg @boxed-data]
+                (log/trace "received message:" (pr-str msg))
+                (cond
+                  (= ::sequential-item-start msg)
+                  (recur true)
 
-                (= ::sequential-item-end msg)
-                nil
+                  (= ::sequential-item-end msg)
+                  nil
 
-                sequential-result?
-                (do
-                  (>! ch boxed-data)
-                  (recur true))
+                  sequential-result?
+                  (do
+                    (>! ch boxed-data)
+                    (recur true))
 
-                :else
-                (>! ch boxed-data)))))
+                  :else
+                  (>! ch boxed-data)))
+              (>! ch boxed-data))))
 
         (catch Throwable th
           (>! ch (box/value th)))

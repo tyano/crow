@@ -1,9 +1,9 @@
 (defproject crow/registrar "2.4-SNAPSHOT"
   :license {:name "Eclipse Public License"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
-  :dependencies [[org.clojure/clojure "_"]
-                 [clj-time "_"]
-                 [crow/core "_"]]
+  :dependencies [[org.clojure/clojure "_" :upgrade false]
+                 [clj-time "_" :upgrade false]
+                 [crow/core "_" :upgrade false]]
   :plugins [[lein-modules "0.3.11"]]
   :profiles {:dev {:resource-paths ["resources-dev"]}
              :logging {:dependencies [[ch.qos.logback/logback-classic "1.2.3"]]

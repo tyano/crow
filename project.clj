@@ -13,6 +13,6 @@
                                                    :password [:env/clojars_password :gpg]}]]
                         :description "Crow is a library for building and collaborating with distributed services implemented by Clojure."
                         :url "https://github.com/tyano/crow"}
-            :versions {org.clojure/clojure "1.9.0"
-                       clj-time "0.14.2"
+            :versions {org.clojure/clojure "1.10.0"
+                       clj-time "0.15.1"
                        crow/core :version}})

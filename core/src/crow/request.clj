@@ -10,7 +10,7 @@
             [async-connect.message :as message]
             [async-connect.client :refer [connect] :as async-connect]
             [async-connect.spec :as async-spec]
-            [box.core :as box])
+            [databox.core :as box])
   (:import [com.shelf.messagepack MessagePackFrameDecoder]
            [msgpack.core Ext]
            [java.net ConnectException]

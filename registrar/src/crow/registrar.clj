@@ -9,7 +9,7 @@
             [clj-time.core :refer [now after? plus millis] :as t]
             [async-connect.server :refer [run-server close-wait] :as async-server]
             [async-connect.message :as message]
-            [box.core :as box]
+            [databox.core :as box]
             [crow.protocol :refer [lease lease-expired registration invalid-message
                                    join-request? heart-beat? discovery? ping?
                                    protocol-error ack call-exception

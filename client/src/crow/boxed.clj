@@ -1,8 +1,8 @@
 (ns crow.boxed
   (:require [crow.utils :refer [select-ns-keys]]
             [crow.discovery.service :as service-info]
-            [box.core :as box])
-  (:import [box.core Box]))
+            [databox.core :as box])
+  (:import [databox.core Box]))
 
 
 (defprotocol ServiceInfo

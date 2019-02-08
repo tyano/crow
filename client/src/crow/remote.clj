@@ -1,6 +1,6 @@
 (ns crow.remote
   (:require [async-connect.client :as client]
-            [box.core :as box]
+            [databox.core :as box]
             [crow.protocol :refer [remote-call call-result?
                                    sequential-item-start? sequential-item? sequential-item-end?
                                    call-exception? protocol-error?]]

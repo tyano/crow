@@ -6,7 +6,7 @@
             [async-connect.server :refer [run-server close-wait] :as async-server]
             [async-connect.message :as message]
             [async-connect.pool :refer [pooled-connection-factory]]
-            [box.core :as box]
+            [databox.core :as box]
             [crow.protocol :refer [remote-call? ping? invalid-message protocol-error call-result
                                    sequential-item-start sequential-item-start?
                                    sequential-item sequential-item?

@@ -9,7 +9,7 @@
             [clojure.set :refer [difference select] :as st]
             [clojure.tools.logging :as log]
             [clj-time.core :refer [now plus after? millis] :as t]
-            [box.core :as box])
+            [databox.core :as box])
   (:import [java.net
             InetAddress
             Inet4Address

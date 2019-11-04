@@ -249,8 +249,8 @@
           (when-let [service (<! service-ch)]
             (dosync
              (let [joined-registrars (ensure (:registrars service))
-                   registrars        (ensure (:registrars join-mgr))
-                   joined            (map #(dissoc % :expire-at) joined-registrars)
+                   registrars        (set (ensure (:registrars join-mgr)))
+                   joined            (set (map #(dissoc % :expire-at) joined-registrars))
                    not-joined        (difference registrars joined)]
                (try
                  (if (seq not-joined)

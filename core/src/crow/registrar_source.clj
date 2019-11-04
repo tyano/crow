@@ -20,7 +20,8 @@
   RegistrarSource
   (registrars [source]
     (when-let [body (:body (http/get source-url))]
-      (with-open [rdr (StringReader. body)]
+      (with-open [sr (StringReader. body)
+                  rdr (BufferedReader. sr)]
         (doall
          (->>
           (for [data (line-seq rdr)]

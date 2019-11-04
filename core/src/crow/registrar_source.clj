@@ -1,5 +1,5 @@
 (ns crow.registrar-source
-  (:require [clojure.string :refer [split]]
+  (:require [clojure.string :refer [split trim]]
             [clj-http.client :as http]
             [clojure.spec.alpha :as s])
   (:import [java.io BufferedReader StringReader]))
@@ -22,9 +22,13 @@
     (when-let [body (:body (http/get source-url))]
       (with-open [rdr (StringReader. body)]
         (doall
-          (for [line (line-seq rdr)]
-            (let [[address port-str] (split line #":")]
-              {:address address, :port (Long/valueOf ^String port-str)})))))))
+         (->>
+          (for [data (line-seq rdr)]
+            (when-let [line (not-empty (trim data))]
+              (let [[address port-str] (split line #":")]
+                (when (and address port-str)
+                  {:address address, :port (Long/valueOf ^String port-str)}))))
+          (filter some?)))))))
 
 (defn url-registrar-source [source-url] (UrlRegistrarSource. source-url))
 

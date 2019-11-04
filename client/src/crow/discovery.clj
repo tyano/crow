@@ -61,7 +61,7 @@
                     (log/error th "An error occured when sending a discovery request.")
                     (abandon-registrar! finder registrar)
                     (throw th)))]
-    (s/assert (s/coll-of :crow.discovery/service) result)
+    (s/assert (s/nilable (s/coll-of :crow.discovery/service)) result)
     (finder/reset-services finder
                            (select-ns-keys discovery-info :crow.service-descriptor)
                            result)

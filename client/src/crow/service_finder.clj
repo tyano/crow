@@ -183,21 +183,22 @@
     [finder service-desc service-coll]
     (when service-desc
       (trace-pr "reset-services - service-desc : services: " [service-desc service-coll])
-      (s/assert (s/coll-of :crow.discovery/service) service-coll)
-      (swap! cache-data
-             (fn [data]
-               (let [old-services (get-in data [::service-map service-desc] [])]
-                 (-> data
-                     (assoc-in [::service-map service-desc] (set service-coll))
-                     (update ::time-cache
-                             (fn [cache]
-                               (let [reset-cache (reduce #(dissoc %1 (:service-id %2))
-                                                         cache
-                                                         old-services)]
-                                 (reduce
-                                  #(assoc %1 (:service-id %2) (Date.))
-                                  reset-cache
-                                  (distinct service-coll))))))))))
+      (let [services (or service-coll [])]
+        (s/assert (s/coll-of :crow.discovery/service) services)
+        (swap! cache-data
+               (fn [data]
+                 (let [old-services (get-in data [::service-map service-desc] [])]
+                   (-> data
+                       (assoc-in [::service-map service-desc] (set services))
+                       (update ::time-cache
+                               (fn [cache]
+                                 (let [reset-cache (reduce #(dissoc %1 (:service-id %2))
+                                                           cache
+                                                           old-services)]
+                                   (reduce
+                                    #(assoc %1 (:service-id %2) (Date.))
+                                    reset-cache
+                                    (distinct services)))))))))))
     finder)
 
   (add-services

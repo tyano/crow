@@ -168,7 +168,12 @@
     (go-loop []
       (when-let [msg (<! read-ch)]
         (when (try
-                (let [result (<! (thread (handle-request registrar @msg)))
+                (let [result (<! (thread
+                                   (box/value
+                                    (try
+                                      (let [read-msg @msg]
+                                        (handle-request registrar read-msg))
+                                      (catch Throwable th th)))))
                       resp   #::message{:data @result :flush? true}]
                   (if timeout-ms
                     (alt!

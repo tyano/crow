@@ -258,10 +258,10 @@
            (let [expired-services
                  (let [services (distinct (apply concat (vals service-map)))]
                    (->> (for [service services]
-                          (let [time (get time-cache (:service-id service))
-                                _    (assert (some? time))
-                                diff (- (.. (Date.) (getTime)) (.. time (getTime)))]
-                            (when (> diff cache-timeout-ms) service)))
+                          (if-let [time (get time-cache (:service-id service))]
+                            (let [diff (- (.. (Date.) (getTime)) (.. time (getTime)))]
+                              (when (> diff cache-timeout-ms) service))
+                            service))
                         (filter some?)))]
              (reduce
                 #(remove-service-from-cache %1 %2)

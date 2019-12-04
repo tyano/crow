@@ -167,31 +167,37 @@
   (fn [context read-ch write-ch]
     (go-loop []
       (when-let [msg (<! read-ch)]
-        (when (try
-                (let [result (<! (thread
-                                   (box/value
-                                    (try
-                                      (let [read-msg @msg]
-                                        (handle-request registrar read-msg))
-                                      (catch Throwable th th)))))
-                      resp   #::message{:data @result :flush? true}]
-                  (if timeout-ms
-                    (alt!
-                      [[write-ch resp]]
-                      ([v ch] v)
+        (try
+          (let [result (<! (thread
+                             (box/value
+                              (try
+                                (let [read-msg @msg]
+                                  (handle-request registrar read-msg))
+                                (catch Throwable th th)))))
+                resp   #::message {:data @result :flush? true}]
+            (if timeout-ms
+              (alt!
+                [[write-ch resp]]
+                ([v ch] v)
 
-                      [(if timeout-ms (timeout timeout-ms) (chan))]
-                      ([v ch]
-                        (log/error "Registrar Timeout: Couldn't write response.")
-                        false))
-                    (>! write-ch resp)))
-                (catch Throwable ex
-                  (log/error ex "An Error ocurred.")
-                  (let [[type throwable] (extract-exception ex)
-                        ex-msg (call-exception type (format-stack-trace throwable))]
-                    (alts! [[write-ch #::message{:data ex-msg :flush? true}] (timeout timeout-ms)])
-                    false)))
-          (recur))))))
+                [(if timeout-ms (timeout timeout-ms) (chan))]
+                ([v ch]
+                 (log/error "Registrar Timeout: Couldn't write response.")
+                 false))
+              (>! write-ch resp)))
+          (catch Throwable ex
+            (log/error ex "An Error ocurred.")
+            (let [[type throwable] (extract-exception ex)
+                  ex-msg           (call-exception type (format-stack-trace throwable))]
+              (alt!
+                [[write-ch #::message{:data ex-msg :flush? true}]]
+                ([v ch] v)
+
+                [(if timeout-ms (timeout timeout-ms) (chan))]
+                ([v ch]
+                 (log/error (ex-info "Write Timeout. Couldn't write a response" {}))
+                 false)))))
+        (recur)))))
 
 (defn- channel-initializer
   [netty-ch config]

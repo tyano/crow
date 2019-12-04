@@ -215,27 +215,27 @@
                         :timeout-ms timeout-ms}]
       (go-loop []
         (when-let [msg (<! read-ch)]
-          (when (try
-                  (let [result (<! (thread
-                                     (box/value
-                                      (try
-                                        (if middleware
-                                          (let [wrapper-fn (middleware (partial handle-request handler-map write-params))]
-                                            (wrapper-fn @msg))
-                                          (handle-request handler-map write-params @msg))
-                                        (catch Throwable th th)))))]
-                    @result)
+          (try
+            (let [result (<! (thread
+                               (box/value
+                                (try
+                                  (if middleware
+                                    (let [wrapper-fn (middleware (partial handle-request handler-map write-params))]
+                                      (wrapper-fn @msg))
+                                    (handle-request handler-map write-params @msg))
+                                  (catch Throwable th th)))))]
+              @result)
 
-                  (catch Throwable ex
-                    (log/error ex "An Error ocurred.")
-                    (alt!
-                      [[write-ch #::message{:data (make-call-exception ex) :flush? true}]]
-                      ([v ch] v)
+            (catch Throwable ex
+              (log/error ex "An Error ocurred.")
+              (alt!
+                [[write-ch #::message{:data (make-call-exception ex) :flush? true}]]
+                ([v ch] v)
 
-                      [(if timeout-ms (timeout timeout-ms) (chan))]
-                      ([v ch]
-                       false))))
-            (recur)))))))
+                [(if timeout-ms (timeout timeout-ms) (chan))]
+                ([v ch]
+                 false))))
+          (recur))))))
 
 
 (defn- channel-initializer

@@ -228,6 +228,8 @@
 
             (catch Throwable ex
               (log/error ex "An Error ocurred.")
+              (when-let [data (not-empty (ex-data ex))]
+                (log/error data))
               (alt!
                 [[write-ch #::message{:data (make-call-exception ex) :flush? true}]]
                 ([v ch] v)

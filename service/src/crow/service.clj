@@ -22,8 +22,11 @@
               ByteArrayDecoder
               ByteArrayEncoder]
            [io.netty.channel
+              Channel
               ChannelPipeline
-              ChannelHandler]))
+              ChannelHandler
+              ChannelHandlerContext]
+           [java.net SocketAddress InetSocketAddress InetAddress]))
 
 
 ;; SERVICE INTERFACES
@@ -207,11 +210,24 @@
     (send-one-data!! write-ch #::message{:data (invalid-message msg) :flush? true} timeout-ms)))
 
 
+(s/fdef remote-address :ret string?)
+
+(defn- remote-address
+  [^ChannelHandlerContext ctx]
+  (let [remote-addr ^InetSocketAddress (-> ctx
+                                           ^Channel (.channel)
+                                           (.remoteAddress))]
+    (when (instance? InetSocketAddress remote-addr)
+      (-> ^InetSocketAddress remote-addr
+          (.getAddress)
+          (.getHostAddress)))))
+
+
 (defn- make-service-handler
   [handler-map service timeout-ms & [{:keys [:crow/middleware]}]]
   (fn [context read-ch write-ch]
-    (let [write-params {:service service
-                        :write-ch write-ch
+    (let [write-params {:service    service
+                        :write-ch   write-ch
                         :timeout-ms timeout-ms}]
       (go-loop []
         (when-let [msg (<! read-ch)]
@@ -227,7 +243,9 @@
               @result)
 
             (catch Throwable ex
-              (log/error ex "An Error ocurred.")
+              (let [remote-addr (when-let [ctx ^ChannelHandlerContext @context]
+                                  (remote-address ctx))]
+                (log/error ex "An Error ocurred." (if remote-addr (str " from: " remote-addr) "")))
               (when-let [data (not-empty (ex-data ex))]
                 (log/error data))
               (alt!

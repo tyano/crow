@@ -4,32 +4,34 @@
             [msgpack.macros :refer [extend-msgpack]]
             [clj-time.core :refer [year month day hour minute second date-time]]
             [clojure.edn :as edn]
-            [crow.marshaller :refer [marshal unmarshal ->EdnObjectMarshaller]]
+            [clojure.tools.logging :refer [debug]]
+            [crow.marshaller :refer [marshal unmarshal] :as marshal]
+            [crow.marshaller.edn :refer [->EdnObjectMarshaller]]
             [clojure.tools.logging :as log])
   (:import [java.io ByteArrayOutputStream ByteArrayInputStream
                     DataOutputStream DataInputStream]))
 
 (def ^:const separator 0x00)
-(def ^:const type-join-request    1)
-(def ^:const type-registration    2)
-(def ^:const type-heart-beat      3)
-(def ^:const type-lease           4)
-(def ^:const type-lease-expired   5)
-(def ^:const type-invalid-message 6)
-(def ^:const type-remote-call     7)
-(def ^:const type-call-result     8)
-(def ^:const type-protocol-error  9)
-(def ^:const type-call-exception 10)
-(def ^:const type-discovery      11)
-(def ^:const type-service-found  12)
-(def ^:const type-service-not-found  13)
+(def ^:const type-join-request    11)
+(def ^:const type-registration    12)
+(def ^:const type-heart-beat      13)
+(def ^:const type-lease           14)
+(def ^:const type-lease-expired   15)
+(def ^:const type-invalid-message 16)
+(def ^:const type-remote-call     17)
+(def ^:const type-call-result     18)
+(def ^:const type-protocol-error  19)
+(def ^:const type-call-exception 20)
+(def ^:const type-discovery      21)
+(def ^:const type-service-found  22)
+(def ^:const type-service-not-found  23)
 
-(def ^:const type-sequential-item-start 14)
-(def ^:const type-sequential-item 15)
-(def ^:const type-sequential-item-end 16)
+(def ^:const type-sequential-item-start 24)
+(def ^:const type-sequential-item 25)
+(def ^:const type-sequential-item-end 26)
 
-(def ^:const type-ping 90)
-(def ^:const type-ack  91)
+(def ^:const type-ping 27)
+(def ^:const type-ack  28)
 
 (def ^:dynamic *object-marshaller* (->EdnObjectMarshaller))
 

@@ -195,11 +195,30 @@
 
 (extend-msgpack RemoteCall type-remote-call
   [ent]
-  (pack-and-combine (:target-ns ent) (:fn-name ent) (map (partial marshal *object-marshaller*) (:args ent)))
+  (let [{marshalled-args :data} (reduce
+                                 (fn [{marshalling-context :context :as rv} arg]
+                                   (let [{::marshal/keys [context data]} (marshal *object-marshaller* marshalling-context arg)]
+                                     (-> rv
+                                         (assoc :context context)
+                                         (update :data concat data))))
+                                 {:context {}
+                                  :data []}
+                                 (:args ent))]
+    (pack-and-combine (:target-ns ent)
+                      (:fn-name ent)
+                      marshalled-args))
   [data]
   (let [[target-ns fn-name args] (unpack-n 3 data)
-        args (map (partial unmarshal *object-marshaller*) args)]
-    (RemoteCall. target-ns fn-name args)))
+        {unmarshalled-args :data} (reduce
+                                   (fn [{marshalling-context :context :as rv} arg]
+                                     (let [{::marshal/keys [context data]} (unmarshal *object-marshaller* marshalling-context arg)]
+                                       (-> rv
+                                           (assoc :context context)
+                                           (update :data concat data))))
+                                   {:context {}
+                                    :data []}
+                                   args)]
+    (RemoteCall. target-ns fn-name unmarshalled-args)))
 
 (defn remote-call
   [target-ns fn-name args]
@@ -210,24 +229,54 @@
 
 (extend-msgpack CallResult type-call-result
   [ent]
-  (pack (marshal *object-marshaller* (:obj ent)))
+  (let [{marshalled-array ::marshal/data} (marshal *object-marshaller* {} (:obj ent))]
+    (pack marshalled-array))
   [data]
-  (let [obj-marshalled (unpack data)
-        obj (unmarshal *object-marshaller* obj-marshalled)]
-    (CallResult. obj)))
+  (let [marshalled-array (unpack data)
+        {:keys [result]} (reduce
+                          (fn [{:keys [context] :as rv} v]
+                            (let [{data-array ::marshal/data, new-context ::marshal/context} (unmarshal *object-marshaller* context v)]
+                              (-> rv
+                                  (assoc :context new-context)
+                                  (update :result concat data-array))))
+                          {:context {}
+                           :result  []}
+                          marshalled-array)]
+    (CallResult. (first result))))
 
 (defn call-result
   [obj]
   (CallResult. obj))
 
 
+(def ^:private sequential-context ^ThreadLocal (ThreadLocal.))
+
+(def seq-ctx (atom {}))
+
+(defn- set-sequential-context!
+  [ctx]
+  (.set sequential-context ctx))
+
+(defn- get-sequential-context
+  []
+  (let [ctx (.get sequential-context)]
+    ctx))
+
+(defn- clear-sequential-context!
+  []
+  (.remove sequential-context))
+
 (defrecord SequentialItemStart [])
 
 (extend-msgpack SequentialItemStart type-sequential-item-start
   [ent]
-  (byte-array 0)
+  (do
+    (set-sequential-context! {})
+    (byte-array 0))
   [data]
-  (SequentialItemStart.))
+  (do
+    (set-sequential-context! {})
+    (SequentialItemStart.)))
 
 (defn sequential-item-start
   []
@@ -238,11 +287,28 @@
 
 (extend-msgpack SequentialItem type-sequential-item
   [ent]
-  (pack (marshal *object-marshaller* (:obj ent)))
+  (let [context (get-sequential-context)
+        {marshalled-array ::marshal/data, new-context ::marshal/context} (marshal *object-marshaller* context (:obj ent))]
+    (set-sequential-context! new-context)
+    (pack marshalled-array))
+
   [data]
-  (let [obj-marshalled (unpack data)
-        obj (unmarshal *object-marshaller* obj-marshalled)]
-    (SequentialItem. obj)))
+  (let [marshalled-array (unpack data)
+
+        current-context (or (get-sequential-context) {})
+
+        {:keys [result], new-context :context}
+        (reduce
+          (fn [{:keys [context] :as rv} v]
+            (let [{data-array ::marshal/data, new-context ::marshal/context :as r} (unmarshal *object-marshaller* context v)]
+              (-> rv
+                  (assoc :context new-context)
+                  (update :result concat data-array))))
+          {:context current-context
+           :result  []}
+          marshalled-array)]
+    (set-sequential-context! new-context)
+    (SequentialItem. (first result))))
 
 (defn sequential-item
   [obj]
@@ -252,9 +318,13 @@
 
 (extend-msgpack SequentialItemEnd type-sequential-item-end
   [ent]
-  (byte-array 0)
+  (do
+    (clear-sequential-context!)
+    (byte-array 0))
   [data]
-  (SequentialItemEnd.))
+  (do
+    (clear-sequential-context!)
+    (SequentialItemEnd.)))
 
 (defn sequential-item-end
   []

@@ -1,17 +1,18 @@
 (ns crow.marshaller.compact
   (:require [clojure.spec.alpha :as s]
+            [clojure.set :refer [map-invert]]
+            [clojure.tools.logging :refer [debug]]
             [crow.marshaller :refer [ObjectMarshaller] :as marshal]
-            [crow.protocol :refer [pack-and-combine]]
+            [crow.logging :refer [trace-pr]]
             [msgpack.core :refer [pack unpack] :as msgpack]
             [msgpack.macros :refer [extend-msgpack]]
-            [msgpack.clojure-extensions]))
+            [msgpack.clojure-extensions]
+            [clojure.tools.logging :as log]))
 
-
-(def ^:dynamic *current-context* nil)
 
 (defrecord FieldId [id])
 
-(extend-msgpack FieldId 2000
+(extend-msgpack FieldId 40
   [obj]
   (pack (:id obj))
   [bytedata]
@@ -23,7 +24,7 @@
 
 (defrecord ContextChange [keymap])
 
-(extend-msgpack ContextChange 2001
+(extend-msgpack ContextChange 41
   [obj]
   (pack (:keymap obj))
   [bytedata]
@@ -36,13 +37,15 @@
 (defn- make-context-from-keys
   [context keys]
   (reduce
-   (fn [{:keys [keymap last-field-id] :or {keymap {}, last-field-id 0} :as ctx} k]
+   (fn [{::keys [keymap last-field-id added-keymap] :or {keymap {}, last-field-id 0, added-keymap {}} :as ctx} k]
      (if (contains? keymap k)
        ctx
-       (let [new-id (inc last-field-id)]
+       (let [new-id (inc last-field-id)
+             field-id (->FieldId new-id)]
          (-> ctx
-             (update :keymap assoc k (->FieldId new-id))
-             (update :last-field-id new-id)))))
+             (assoc ::last-field-id new-id)
+             (update ::keymap assoc k field-id)
+             (update ::added-keymap assoc k field-id)))))
    context
    keys))
 
@@ -58,7 +61,7 @@
         new-context (make-context-from-keys context key-coll)]
     (reduce
      (fn [{:keys [context] :as r} [k v]]
-       (let [new-key (get (:keymap context) k k)
+       (let [new-key (get (::keymap context) k k)
              {next-context :context data :data} (compact-with-context new-context v)]
          (-> r
              (update :data assoc new-key data)
@@ -92,47 +95,83 @@
      :data obj}))
 
 (defn- resolve-map-with-context
+  "Uncompact mapdata with context and returns a map with keys :context and :resolved.
+  the value of :resolved key is a resolved (uncompacted) map object.
+  :context is next context object."
   [context mapdata]
   ;; convert all keys in a map from field-id to keyword
-  ;; context is a map with keyword -> FieldId.
+  ;; ::keymap is a map of keyword -> FieldId.
   ;; we must invert it before resolving a map.
-  (let [inverted (update context :keymap map-invert)]
-    (->> mapdata
-         (map (fn [[k v]]
-                (vector
-                 (get (:keymap inverted) k k)
-                 (unmarshal-with-context context v))))
-         (into {}))))
+  (let [inverted (update context ::keymap map-invert)]
+    (reduce
+     (fn [{:keys [context] :as r} [k v]]
+       (let [new-key (get (::keymap inverted) k k)
+             {next-context :context data :data} (resolve-with-context context v)]
+         (-> r
+             (update :resolved assoc new-key (first data))
+             (assoc :context next-context))))
+     {:context  context
+      :resolved {}}
+     mapdata)))
 
 (defn- resolve-with-context
+  "Resolve compacted objects with context.
+  The 'data' key of the return value of this function always is a vector containing only 1 value or an empty vector.
+  Empty vector means no result (it's not same with NIL), so that the result must be ignored.
+  If it isn't an empty vector, the first item of the vector is the resolved item.
+  The 'context' key is next context."
   [context obj]
-  (cond
-    (map? obj)
-    (resolve-map-with-context context obj)
+  (if (context-change? obj)
+    (do
+      (debug "context!")
+      {:context  (update context ::keymap merge (:keymap obj))
+       :data     []})
 
-    (sequential? obj)
-    (map #(resolve-with-context context %) obj)
+    (let [{:keys [resolved] :as result}
+          (cond
+            (map? obj)
+            (resolve-map-with-context context obj)
 
-    :else
-    obj))
+            (sequential? obj)
+            (reduce
+             (fn [{:keys [context] :as r} v]
+               (let [{next-context :context data :data} (resolve-with-context context v)]
+                 (-> r
+                     (update :resolved concat data)
+                     (assoc :context next-context))))
+             {:context context :resolved []}
+             obj)
+
+            :else
+            {:context context
+             :resolved obj})]
+      (-> result
+          (dissoc :resolved)
+          (assoc :data (vector resolved))))))
 
 (defn unmarshall-data
-  [context bytedata]
-  (let [obj (unpack bytedata)]
-    (cond
-      (context-change? obj)
-      #::marshal{:context (update context :keymap merge (:keymap obj))
-                 :data    []}
-
-      :else
-      #::marshal{:context context
-                 :data    [(resolve-with-context context obj)]})))
+  "Unmarshaling a marshalled object with context.
+  Return value of this function is always a vector.
+  Some marshalled object contains no value but contains information for uncompacting next objects.
+  Such no-value object will be returned as an empty vector.
+  Not empty objects always are returned as a vector containing one unmarshalled object."
+  [context obj]
+  (let [{:keys [data], new-context :context} (resolve-with-context context obj)]
+    #::marshal{:context new-context
+               :data    data}))
 
 (defn marshall-data
+  "Marshalling a object with context.
+  This marshaller will compact maps by replacing map-keys with simple numbers.
+  The marshalling result of one object might create multiple objects. Some of them will be
+  'ContextChange' object which contains original key informations. So the result of this function
+  always a vector."
   [context obj]
-  (let [{next-context :context data :data} (compact-with-context context obj)]
-    #::marshal{:context next-context
-               :data    [data]}))
+  (let [{{::keys [added-keymap] :as new-context} :context data :data} (compact-with-context context obj)]
+    #::marshal{:context (dissoc new-context ::added-keymap)
+               :data    (if (seq added-keymap)
+                          [(ContextChange. added-keymap) data]
+                          [data])}))
 
 (defrecord CompactObjectMarshaller []
   ObjectMarshaller

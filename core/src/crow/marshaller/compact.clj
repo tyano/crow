@@ -2,13 +2,16 @@
   (:require [clojure.spec.alpha :as s]
             [clojure.set :refer [map-invert]]
             [clojure.tools.logging :refer [debug]]
-            [crow.marshaller :refer [ObjectMarshaller] :as marshal]
+            [crow.marshaller :refer [ObjectMarshaller marshal unmarshal] :as marshaller]
+            [crow.marshaller.edn :refer [->EdnObjectMarshaller]]
             [crow.logging :refer [trace-pr]]
             [msgpack.core :refer [pack unpack] :as msgpack]
             [msgpack.macros :refer [extend-msgpack]]
             [msgpack.clojure-extensions]
             [clojure.tools.logging :as log]))
 
+
+(def ^:private edn-object-marshaller (->EdnObjectMarshaller))
 
 (defrecord FieldId [id])
 
@@ -92,7 +95,9 @@
 
     :else
     {:context context
-     :data obj}))
+     :data (-> (marshal edn-object-marshaller context obj)
+               ::marshaller/data
+               first)}))
 
 (defn- resolve-map-with-context
   "Uncompact mapdata with context and returns a map with keys :context and :resolved.
@@ -144,7 +149,9 @@
 
             :else
             {:context context
-             :resolved obj})]
+             :resolved (-> (unmarshal edn-object-marshaller context obj)
+                           ::marshaller/data
+                           first)})]
       (-> result
           (dissoc :resolved)
           (assoc :data (vector resolved))))))
@@ -157,8 +164,8 @@
   Not empty objects always are returned as a vector containing one unmarshalled object."
   [context obj]
   (let [{:keys [data], new-context :context} (resolve-with-context context obj)]
-    #::marshal{:context new-context
-               :data    data}))
+    #::marshaller{:context new-context
+                  :data    data}))
 
 (defn marshall-data
   "Marshalling a object with context.
@@ -168,10 +175,10 @@
   always a vector."
   [context obj]
   (let [{{::keys [added-keymap] :as new-context} :context data :data} (compact-with-context context obj)]
-    #::marshal{:context (dissoc new-context ::added-keymap)
-               :data    (if (seq added-keymap)
-                          [(ContextChange. added-keymap) data]
-                          [data])}))
+    #::marshaller{:context (dissoc new-context ::added-keymap)
+                  :data    (if (seq added-keymap)
+                             [(ContextChange. added-keymap) data]
+                             [data])}))
 
 (defrecord CompactObjectMarshaller []
   ObjectMarshaller

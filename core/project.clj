@@ -9,4 +9,6 @@
                  [clojure-msgpack "1.2.1"]
                  [com.shelf/messagepack-framedecoder "1.0-SNAPSHOT"]]
   :plugins [[lein-modules "0.3.11"]]
-  :profiles {:dev {}})
+  :profiles {:dev {}
+             :repl {:dependencies [[ch.qos.logback/logback-classic "1.2.3"]]
+                    :resource-paths ["logging-resources"]}})

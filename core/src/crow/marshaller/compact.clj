@@ -142,7 +142,7 @@
              (fn [{:keys [context] :as r} v]
                (let [{next-context :context data :data} (resolve-with-context context v)]
                  (-> r
-                     (update :resolved concat data)
+                     (update :resolved conj data)
                      (assoc :context next-context))))
              {:context context :resolved []}
              obj)

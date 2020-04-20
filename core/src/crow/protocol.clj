@@ -10,7 +10,9 @@
             [crow.marshaller.compact :refer [->CompactObjectMarshaller]]
             [clojure.tools.logging :as log])
   (:import [java.io ByteArrayOutputStream ByteArrayInputStream
-                    DataOutputStream DataInputStream]))
+            DataOutputStream DataInputStream]
+           [java.nio ByteBuffer ByteOrder]
+           [java.util UUID]))
 
 (def ^:const separator 0x00)
 (def ^:const type-join-request    11)
@@ -255,78 +257,91 @@
   (CallResult. obj))
 
 
-(def ^:private sequential-context ^ThreadLocal (ThreadLocal.))
+(defn new-sequence-id
+  "Create a new sequence-id.
+  sequence-id is a bytearray of a UUID."
+  []
+  (let [uuid  ^UUID (UUID/randomUUID)
+        bytes ^bytes (byte-array 16)]
+    (.. (ByteBuffer/wrap bytes)
+        (order ByteOrder/BIG_ENDIAN)
+        (putLong (.getMostSignificantBits uuid))
+        (putLong (.getLeastSignificantBits uuid)))
+    bytes))
 
-(def seq-ctx (atom {}))
+(def ^:private sequential-context (atom {}))
 
 (defn- set-sequential-context!
-  [ctx]
-  (.set sequential-context ctx))
+  [sequence-id ctx]
+  (swap! sequential-context assoc sequence-id ctx))
 
 (defn- get-sequential-context
-  []
-  (let [ctx (.get sequential-context)]
-    ctx))
+  [sequence-id]
+  (get @sequential-context sequence-id))
 
 (defn- clear-sequential-context!
-  []
-  (.remove sequential-context))
+  [sequence-id]
+  (swap! sequential-context dissoc sequence-id))
 
-(defrecord SequentialItemStart [])
+(defrecord SequentialItemStart [sequence-id])
 
 (extend-msgpack SequentialItemStart type-sequential-item-start
   [ent]
-  (do
-    (set-sequential-context! {})
-    (byte-array 0))
+  (let [id (:sequence-id ent)]
+    (set-sequential-context! id {})
+    (pack id))
   [data]
-  (do
-    (set-sequential-context! {})
-    (SequentialItemStart.)))
+  (let [id (unpack data)]
+    (set-sequential-context! id {})
+    (SequentialItemStart. id)))
 
 (defn sequential-item-start
-  []
-  (SequentialItemStart.))
+  [id]
+  (SequentialItemStart. id))
 
 
-(defrecord SequentialItem [obj])
+(defrecord SequentialItem [sequence-id obj])
 
 (extend-msgpack SequentialItem type-sequential-item
   [ent]
-  (let [context (get-sequential-context)
+  (let [id (:sequence-id ent)
+        context (get-sequential-context id)
         {marshalled-array ::marshal/data, new-context ::marshal/context} (marshal *object-marshaller* context (:obj ent))]
-    (set-sequential-context! new-context)
-    (pack marshalled-array))
+    (set-sequential-context! id new-context)
+    (pack-and-combine id marshalled-array))
 
   [data]
-  (let [marshalled-array (unpack data)
+  (let [[id marshalled-objects] (unpack-n 2 data)
 
-        current-context  (or (get-sequential-context) {})
+        _ (debug "id:" id)
+        _ (debug "marshalled-objects:" marshalled-objects)
+
+        current-context  (or (get-sequential-context id) {})
 
         {:keys [result], new-context :context}
-        (unmarshal-one current-context marshalled-array)]
-    (set-sequential-context! new-context)
-    (SequentialItem. result)))
+        (unmarshal-one current-context marshalled-objects)]
+    (set-sequential-context! id new-context)
+    (SequentialItem. id result)))
 
 (defn sequential-item
-  [obj]
-  (SequentialItem. obj))
+  [sequence-id obj]
+  (SequentialItem. sequence-id obj))
 
-(defrecord SequentialItemEnd [])
+(defrecord SequentialItemEnd [sequence-id])
 
 (extend-msgpack SequentialItemEnd type-sequential-item-end
   [ent]
-  (do
-    (clear-sequential-context!)
-    (byte-array 0))
+  (let [id (:sequence-id ent)]
+    (clear-sequential-context! id)
+    (pack id))
   [data]
-  (do
-    (clear-sequential-context!)
-    (SequentialItemEnd.)))
+  (let [id (unpack data)]
+    (clear-sequential-context! id)
+    (SequentialItemEnd. id)))
 
 (defn sequential-item-end
-  []
-  (SequentialItemEnd.))
+  [id]
+  (SequentialItemEnd. id))
 
 
 

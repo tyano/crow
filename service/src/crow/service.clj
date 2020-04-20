@@ -11,7 +11,7 @@
                                    sequential-item-start sequential-item-start?
                                    sequential-item sequential-item?
                                    sequential-item-end sequential-item-end?
-                                   call-exception ack] :as p]
+                                   call-exception ack new-sequence-id] :as p]
             [crow.request :refer [frame-decorder format-stack-trace packer unpacker] :as request]
             [crow.join-manager :refer [start-join-manager stop-join-manager join]]
             [crow.logging :refer [trace-pr]]
@@ -159,9 +159,9 @@
   (if-let [target-fn (get handler-map {:namespace target-ns, :name fn-name}) #_(when (find-ns (symbol target-ns)) (find-var (symbol target-ns fn-name)))]
     (let [r (apply target-fn args)]
       (if (iterable? r)
-        (do
+        (let [sequence-id (new-sequence-id)]
           (send-one-data!! write-ch
-                           #::message{:data (sequential-item-start)
+                           #::message{:data (sequential-item-start sequence-id)
                                       :flush? false}
                            timeout-ms)
 
@@ -171,13 +171,13 @@
               (do
                 (trace-pr "remote-call response:" item)
                 (when (send-one-data!! write-ch
-                                       #::message{:data (sequential-item item)
+                                       #::message{:data (sequential-item sequence-id item)
                                                   :flush? (>= write-count 10)}
                                        timeout-ms)
                   (recur (rest items) (if (>= write-count 10) 0 (inc write-count)))))
 
               ;; all items ware handled. send a sequential-item-end.
-              (let [resp (sequential-item-end)]
+              (let [resp (sequential-item-end sequence-id)]
                 (trace-pr "remote-call response:" resp)
                 (send-one-data!! write-ch
                                  #::message{:data resp

@@ -123,7 +123,7 @@
   [context obj]
   (if (context-change? obj)
     (do
-      (debug "context!")
+      (debug "context! " (pr-str obj))
       {:context  (update context ::keymap merge (:keymap obj))
        :data     []})
 

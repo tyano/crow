@@ -190,7 +190,6 @@
 (defn invalid-message [msg] (InvalidMessage. msg))
 
 
-
 (defrecord RemoteCall [target-ns fn-name args])
 
 (extend-msgpack RemoteCall type-remote-call
@@ -208,7 +207,7 @@
                       (:fn-name ent)
                       marshalled-args))
   [data]
-  (let [[target-ns fn-name args] (unpack-n 3 data)
+  (let [[target-ns fn-name args]  (unpack-n 3 data)
         {unmarshalled-args :data} (reduce
                                    (fn [{marshalling-context :context :as rv} arg]
                                      (let [{::marshal/keys [context data]} (unmarshal *object-marshaller* marshalling-context arg)]
@@ -225,6 +224,20 @@
   (RemoteCall. target-ns fn-name args))
 
 
+(defn- unmarshal-one
+  [current-context marshalled-array]
+  (let [{:keys [result context]} (reduce
+                                  (fn [{:keys [context] :as rv} v]
+                                    (let [{data-array ::marshal/data, new-context ::marshal/context} (unmarshal *object-marshaller* context v)]
+                                      (-> rv
+                                          (assoc :context new-context)
+                                          (update :result concat data-array))))
+                                  {:context current-context
+                                   :result  []}
+                                  marshalled-array)]
+    {:context context
+     :result  (first result)}))
+
 (defrecord CallResult [obj])
 
 (extend-msgpack CallResult type-call-result
@@ -233,16 +246,8 @@
     (pack marshalled-array))
   [data]
   (let [marshalled-array (unpack data)
-        {:keys [result]} (reduce
-                          (fn [{:keys [context] :as rv} v]
-                            (let [{data-array ::marshal/data, new-context ::marshal/context} (unmarshal *object-marshaller* context v)]
-                              (-> rv
-                                  (assoc :context new-context)
-                                  (update :result concat data-array))))
-                          {:context {}
-                           :result  []}
-                          marshalled-array)]
-    (CallResult. (first result))))
+        {:keys [result]} (unmarshal-one {} marshalled-array)]
+    (CallResult. result)))
 
 (defn call-result
   [obj]
@@ -295,20 +300,12 @@
   [data]
   (let [marshalled-array (unpack data)
 
-        current-context (or (get-sequential-context) {})
+        current-context  (or (get-sequential-context) {})
 
         {:keys [result], new-context :context}
-        (reduce
-          (fn [{:keys [context] :as rv} v]
-            (let [{data-array ::marshal/data, new-context ::marshal/context :as r} (unmarshal *object-marshaller* context v)]
-              (-> rv
-                  (assoc :context new-context)
-                  (update :result concat data-array))))
-          {:context current-context
-           :result  []}
-          marshalled-array)]
+        (unmarshal-one current-context marshalled-array)]
     (set-sequential-context! new-context)
-    (SequentialItem. (first result))))
+    (SequentialItem. result)))
 
 (defn sequential-item
   [obj]

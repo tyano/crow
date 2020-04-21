@@ -65,7 +65,7 @@
     (reduce
      (fn [{:keys [context] :as r} [k v]]
        (let [new-key (get (::keymap context) k k)
-             {next-context :context data :data} (compact-with-context new-context v)]
+             {next-context :context data :data} (compact-with-context context v)]
          (-> r
              (update :data assoc new-key data)
              (assoc :context next-context))))

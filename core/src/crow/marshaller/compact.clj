@@ -100,24 +100,26 @@
                first)}))
 
 (defn- resolve-map-with-context
-  "Uncompact mapdata with context and returns a map with keys :context and :resolved.
-  the value of :resolved key is a resolved (uncompacted) map object.
+  "Uncompact mapdata with context and returns a map with keys :context and :data.
+  the value of :data key is A VECTOR of a resolved (uncompacted) map object.
   :context is next context object."
   [context mapdata]
   ;; convert all keys in a map from field-id to keyword
   ;; ::keymap is a map of keyword -> FieldId.
   ;; we must invert it before resolving a map.
-  (let [inverted (update context ::keymap map-invert)]
-    (reduce
-     (fn [{:keys [context] :as r} [k v]]
-       (let [new-key (get (::keymap inverted) k k)
-             {next-context :context data :data} (resolve-with-context context v)]
-         (-> r
-             (update :resolved assoc new-key (first data))
-             (assoc :context next-context))))
-     {:context  context
-      :resolved {}}
-     mapdata)))
+  (let [inverted (update context ::keymap map-invert)
+        {:keys [context resolved]} (reduce
+                                    (fn [{:keys [context] :as r} [k v]]
+                                      (let [new-key (get (::keymap inverted) k k)
+                                            {next-context :context data :data} (resolve-with-context context v)]
+                                        (-> r
+                                            (update :resolved assoc new-key (first data))
+                                            (assoc :context next-context))))
+                                    {:context  context
+                                     :resolved {}}
+                                    mapdata)]
+    {:context context
+     :data [resolved]}))
 
 (defn- resolve-with-context
   "Resolve compacted objects with context.
@@ -126,35 +128,32 @@
   If it isn't an empty vector, the first item of the vector is the resolved item.
   The 'context' key is next context."
   [context obj]
-  (if (context-change? obj)
+  (cond
+    (context-change? obj)
     (do
       (debug "context! " (pr-str obj))
       {:context  (update context ::keymap merge (:keymap obj))
        :data     []})
 
-    (let [{:keys [resolved] :as result}
-          (cond
-            (map? obj)
-            (resolve-map-with-context context obj)
+    (map? obj)
+    (resolve-map-with-context context obj)
 
-            (sequential? obj)
-            (reduce
-             (fn [{:keys [context] :as r} v]
-               (let [{next-context :context data :data} (resolve-with-context context v)]
-                 (-> r
-                     (update :resolved conj data)
-                     (assoc :context next-context))))
-             {:context context :resolved []}
-             obj)
+    (sequential? obj)
+    (reduce
+     (fn [{:keys [context] :as r} v]
+       (let [{next-context :context data :data} (resolve-with-context context v)]
+         (if-not (seq data)
+           (assoc r :context next-context)
+           (-> r
+               (update :data conj data)
+               (assoc :context next-context)))))
+     {:context context :data []}
+     obj)
 
-            :else
-            {:context context
-             :resolved (-> (unmarshal edn-object-marshaller context obj)
-                           ::marshaller/data
-                           first)})]
-      (-> result
-          (dissoc :resolved)
-          (assoc :data (vector resolved))))))
+    :else
+    {:context context
+     :data (-> (unmarshal edn-object-marshaller context obj)
+               ::marshaller/data)}))
 
 (defn unmarshall-data
   "Unmarshaling a marshalled object with context.
@@ -165,7 +164,7 @@
   [context obj]
   (let [{:keys [data], new-context :context} (resolve-with-context context obj)]
     #::marshaller{:context new-context
-                  :data    data}))
+                  :data data}))
 
 (defn marshall-data
   "Marshalling a object with context.

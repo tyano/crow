@@ -140,16 +140,17 @@
     (resolve-map-with-context context obj)
 
     (sequential? obj)
-    (reduce
-     (fn [{:keys [context] :as r} v]
-       (let [{next-context :context data :data} (resolve-with-context context v)]
-         (if-not (seq data)
-           (assoc r :context next-context)
-           (-> r
-               (update :data concat data)
-               (assoc :context next-context)))))
-     {:context context :data []}
-     obj)
+    (-> (reduce
+         (fn [{:keys [context] :as r} v]
+           (let [{next-context :context data :data} (resolve-with-context context v)]
+             (if-not (seq data)
+               (assoc r :context next-context)
+               (-> r
+                   (update :data concat data)
+                   (assoc :context next-context)))))
+         {:context context :data []}
+         obj)
+        (update :data vector))
 
     :else
     {:context context

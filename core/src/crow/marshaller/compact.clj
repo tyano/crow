@@ -87,6 +87,7 @@
     (reduce
      (fn [{:keys [context] :as r} v]
        (let [{next-context :context data :data} (compact-with-context context v)]
+         (debug "data:" (pr-str data))
          (-> r
              (update :data conj data)
              (assoc :context next-context))))
@@ -145,7 +146,7 @@
          (if-not (seq data)
            (assoc r :context next-context)
            (-> r
-               (update :data conj data)
+               (update :data concat data)
                (assoc :context next-context)))))
      {:context context :data []}
      obj)

@@ -12,7 +12,7 @@
   (:import [java.io ByteArrayOutputStream ByteArrayInputStream
             DataOutputStream DataInputStream]
            [java.nio ByteBuffer ByteOrder]
-           [java.util UUID]))
+           [java.util UUID Arrays]))
 
 (def ^:const separator 0x00)
 (def ^:const type-join-request    11)
@@ -262,6 +262,7 @@
   sequence-id is a bytearray of a UUID."
   []
   (let [uuid  ^UUID (UUID/randomUUID)
+        _     (debug "uuid:" uuid)
         bytes ^bytes (byte-array 16)]
     (.. (ByteBuffer/wrap bytes)
         (order ByteOrder/BIG_ENDIAN)
@@ -269,19 +270,28 @@
         (putLong (.getLeastSignificantBits uuid)))
     bytes))
 
+(deftype SequenceIdKey [sequence-id]
+  Object
+  (hashCode [this] (Arrays/hashCode ^bytes sequence-id))
+  (equals [this other] (Arrays/equals ^bytes sequence-id ^bytes (.-sequence-id other))))
+
+(defn sequence-id-key
+  [sequence-id]
+  (SequenceIdKey. sequence-id))
+
 (def ^:private sequential-context (atom {}))
 
 (defn- set-sequential-context!
   [sequence-id ctx]
-  (swap! sequential-context assoc sequence-id ctx))
+  (swap! sequential-context assoc (sequence-id-key sequence-id) ctx))
 
 (defn- get-sequential-context
   [sequence-id]
-  (get @sequential-context sequence-id))
+  (get @sequential-context (sequence-id-key sequence-id)))
 
 (defn- clear-sequential-context!
   [sequence-id]
-  (swap! sequential-context dissoc sequence-id))
+  (swap! sequential-context dissoc (sequence-id-key sequence-id)))
 
 (defrecord SequentialItemStart [sequence-id])
 
@@ -319,7 +329,9 @@
         current-context  (or (get-sequential-context id) {})
 
         {:keys [result], new-context :context}
-        (unmarshal-one current-context marshalled-objects)]
+        (unmarshal-one current-context marshalled-objects)
+
+        _ (debug "item: " (pr-str result))]
     (set-sequential-context! id new-context)
     (SequentialItem. id result)))
 

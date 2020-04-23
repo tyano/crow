@@ -4,7 +4,7 @@
             [msgpack.macros :refer [extend-msgpack]]
             [clj-time.core :refer [year month day hour minute second date-time]]
             [clojure.edn :as edn]
-            [clojure.tools.logging :refer [debug]]
+            [crow.logging :refer [trace-pr]]
             [crow.marshaller :refer [marshal unmarshal] :as marshal]
             [crow.marshaller.edn :refer [->EdnObjectMarshaller]]
             [crow.marshaller.compact :refer [->CompactObjectMarshaller]]
@@ -262,7 +262,7 @@
   sequence-id is a bytearray of a UUID."
   []
   (let [uuid  ^UUID (UUID/randomUUID)
-        _     (debug "uuid:" uuid)
+        _     (trace-pr "uuid:" uuid)
         bytes ^bytes (byte-array 16)]
     (.. (ByteBuffer/wrap bytes)
         (order ByteOrder/BIG_ENDIAN)
@@ -323,15 +323,15 @@
   [data]
   (let [[id marshalled-objects] (unpack-n 2 data)
 
-        _ (debug "id:" id)
-        _ (debug "marshalled-objects:" marshalled-objects)
+        _ (trace-pr "id:" id)
+        _ (trace-pr "marshalled-objects:" marshalled-objects)
 
         current-context  (or (get-sequential-context id) {})
 
         {:keys [result], new-context :context}
         (unmarshal-one current-context marshalled-objects)
 
-        _ (debug "item: " (pr-str result))]
+        _ (trace-pr "item: " (pr-str result))]
     (set-sequential-context! id new-context)
     (SequentialItem. id result)))
 

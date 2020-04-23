@@ -1,14 +1,12 @@
 (ns crow.marshaller.compact
   (:require [clojure.spec.alpha :as s]
             [clojure.set :refer [map-invert]]
-            [clojure.tools.logging :refer [debug]]
             [crow.marshaller :refer [ObjectMarshaller marshal unmarshal] :as marshaller]
             [crow.marshaller.edn :refer [->EdnObjectMarshaller]]
             [crow.logging :refer [trace-pr]]
             [msgpack.core :refer [pack unpack] :as msgpack]
             [msgpack.macros :refer [extend-msgpack]]
-            [msgpack.clojure-extensions]
-            [clojure.tools.logging :as log]))
+            [msgpack.clojure-extensions]))
 
 
 (def ^:private edn-object-marshaller (->EdnObjectMarshaller))
@@ -87,7 +85,7 @@
     (reduce
      (fn [{:keys [context] :as r} v]
        (let [{next-context :context data :data} (compact-with-context context v)]
-         (debug "data:" (pr-str data))
+         (trace-pr "data:" data)
          (-> r
              (update :data conj data)
              (assoc :context next-context))))
@@ -132,7 +130,7 @@
   (cond
     (context-change? obj)
     (do
-      (debug "context! " (pr-str obj))
+      (trace-pr "context! " obj)
       {:context  (update context ::keymap merge (:keymap obj))
        :data     []})
 

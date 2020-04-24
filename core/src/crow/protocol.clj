@@ -6,8 +6,7 @@
             [clojure.edn :as edn]
             [crow.logging :refer [trace-pr]]
             [crow.marshaller :refer [marshal unmarshal] :as marshal]
-            [crow.marshaller.edn :refer [->EdnObjectMarshaller]]
-            [crow.marshaller.compact :refer [->CompactObjectMarshaller]]
+            [crow.marshaller.compact :refer [compact-object-marshaller]]
             [clojure.tools.logging :as log])
   (:import [java.io ByteArrayOutputStream ByteArrayInputStream
             DataOutputStream DataInputStream]
@@ -36,7 +35,7 @@
 (def ^:const type-ping 27)
 (def ^:const type-ack  28)
 
-(def ^:dynamic *object-marshaller* (->CompactObjectMarshaller))
+(def ^:dynamic *object-marshaller* (compact-object-marshaller))
 
 (defn install-default-marshaller
   [marshaller]

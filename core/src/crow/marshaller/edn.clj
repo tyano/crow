@@ -37,20 +37,25 @@
       (wrapper-array? obj-class)   :primitive-array
       :else :object)))
 
-(defmulti marshal-data "convert an object into other msgpack-safe object." (fn [obj] (object-type obj)))
-(defmulti unmarshal-data "convert an object from msgpack-safe format to a real object." (fn [obj] (class obj)))
+(defmulti marshal-data "convert an object into other msgpack-safe object." (fn [edn-opts obj] (object-type obj)))
+(defmulti unmarshal-data "convert an object from msgpack-safe format to a real object." (fn [edn-opts obj] (class obj)))
 
-(defmethod marshal-data :primitive [obj] obj)
-(defmethod marshal-data :primitive-array [obj] obj)
-(defmethod marshal-data :default [obj] (pr-str obj))
+(defmethod marshal-data :primitive [edn-opts obj] obj)
+(defmethod marshal-data :primitive-array [edn-opts obj] obj)
+(defmethod marshal-data :default [edn-opts obj] (pr-str obj))
 
-(defmethod unmarshal-data String [obj] (edn/read-string obj))
-(defmethod unmarshal-data :default [obj] obj)
+(defmethod unmarshal-data String [edn-opts obj] (edn/read-string edn-opts obj))
+(defmethod unmarshal-data :default [edn-opts obj] obj)
 
 (defrecord EdnObjectMarshaller
-  []
+  [edn-opts]
   ObjectMarshaller
-  (marshal [this context obj] #::marshal{:context context :data [(marshal-data obj)]})
-  (unmarshal [this context obj] #::marshal{:context context :data [(unmarshal-data obj)]}))
+  (marshal [this context obj] #::marshal{:context context :data [(marshal-data edn-opts obj)]})
+  (unmarshal [this context obj] #::marshal{:context context :data [(unmarshal-data edn-opts obj)]}))
 
+(defn edn-object-marshaller
+  ([edn-opts]
+   (->EdnObjectMarshaller edn-opts))
+  ([]
+   (edn-object-marshaller {})))
 

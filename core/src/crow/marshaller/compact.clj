@@ -2,14 +2,12 @@
   (:require [clojure.spec.alpha :as s]
             [clojure.set :refer [map-invert]]
             [crow.marshaller :refer [ObjectMarshaller marshal unmarshal] :as marshaller]
-            [crow.marshaller.edn :refer [->EdnObjectMarshaller]]
-            [crow.logging :refer [trace-pr]]
+            [crow.marshaller.edn :refer [edn-object-marshaller]]
+            [crow.logging :refer [trace-pr debug-pr]]
             [msgpack.core :refer [pack unpack] :as msgpack]
             [msgpack.macros :refer [extend-msgpack]]
             [msgpack.clojure-extensions]))
 
-
-(def ^:private edn-object-marshaller (->EdnObjectMarshaller))
 
 (defrecord FieldId [id])
 
@@ -58,12 +56,13 @@
 
 (defn- compact-map-with-context
   [context mapdata]
-  (let [key-coll (keys mapdata)
-        new-context (make-context-from-keys context key-coll)]
+  (let [{key-coll :data current-context :context} (compact-with-context context (keys mapdata))
+        new-context (make-context-from-keys current-context key-coll)]
     (reduce
      (fn [{:keys [context] :as r} [k v]]
-       (let [new-key (get (::keymap context) k k)
-             {next-context :context data :data} (compact-with-context context v)]
+       (let [{marshalled-key :data current-context :context} (compact-with-context context k)
+             new-key (get (::keymap current-context) marshalled-key marshalled-key)
+             {next-context :context data :data} (compact-with-context current-context v)]
          (-> r
              (update :data assoc new-key data)
              (assoc :context next-context))))
@@ -76,7 +75,7 @@
     :ret (s/keys :req-un [::context ::data]))
 
 (defn- compact-with-context
-  [context obj]
+  [{::keys [internal-marshaller] :as context} obj]
   (cond
     (map? obj)
     (compact-map-with-context context obj)
@@ -94,7 +93,7 @@
 
     :else
     {:context context
-     :data (-> (marshal edn-object-marshaller context obj)
+     :data (-> (marshal internal-marshaller context obj)
                ::marshaller/data
                first)}))
 
@@ -110,9 +109,10 @@
         {:keys [context resolved]} (reduce
                                     (fn [{:keys [context] :as r} [k v]]
                                       (let [new-key (get (::keymap inverted) k k)
-                                            {next-context :context data :data} (resolve-with-context context v)]
+                                            {key-context :context [unmarshalled-key] :data} (resolve-with-context context new-key)
+                                            {next-context :context [data] :data} (resolve-with-context key-context v)]
                                         (-> r
-                                            (update :resolved assoc new-key (first data))
+                                            (update :resolved assoc unmarshalled-key data)
                                             (assoc :context next-context))))
                                     {:context  context
                                      :resolved {}}
@@ -126,11 +126,11 @@
   Empty vector means no result (it's not same with NIL), so that the result must be ignored.
   If it isn't an empty vector, the first item of the vector is the resolved item.
   The 'context' key is next context."
-  [context obj]
+  [{::keys [internal-marshaller] :as context} obj]
   (cond
     (context-change? obj)
     (do
-      (trace-pr "context! " obj)
+      (debug-pr "context! " obj)
       {:context  (update context ::keymap merge (:keymap obj))
        :data     []})
 
@@ -152,10 +152,10 @@
 
     :else
     {:context context
-     :data (-> (unmarshal edn-object-marshaller context obj)
+     :data (-> (unmarshal internal-marshaller context obj)
                ::marshaller/data)}))
 
-(defn unmarshall-data
+(defn unmarshal-data
   "Unmarshaling a marshalled object with context.
   Return value of this function is always a vector.
   Some marshalled object contains no value but contains information for uncompacting next objects.
@@ -163,10 +163,11 @@
   Not empty objects always are returned as a vector containing one unmarshalled object."
   [context obj]
   (let [{:keys [data], new-context :context} (resolve-with-context context obj)]
+    (debug-pr "unmarshalled:" data)
     #::marshaller{:context new-context
                   :data data}))
 
-(defn marshall-data
+(defn marshal-data
   "Marshalling a object with context.
   This marshaller will compact maps by replacing map-keys with simple numbers.
   The marshalling result of one object might create multiple objects. Some of them will be
@@ -174,15 +175,23 @@
   always a vector."
   [context obj]
   (let [{{::keys [added-keymap] :as new-context} :context data :data} (compact-with-context context obj)]
+    (debug-pr "marshalled:" data)
     #::marshaller{:context (dissoc new-context ::added-keymap)
                   :data    (if (seq added-keymap)
                              [(ContextChange. added-keymap) data]
                              [data])}))
 
-(defrecord CompactObjectMarshaller []
+(defrecord CompactObjectMarshaller [internal-marshaller]
   ObjectMarshaller
   (marshal [this context obj]
-    (marshall-data context obj))
+    (marshal-data (assoc context ::internal-marshaller internal-marshaller) obj))
 
   (unmarshal [this context obj]
-    (unmarshall-data context obj)))
+    (unmarshal-data (assoc context ::internal-marshaller internal-marshaller) obj)))
+
+(defn compact-object-marshaller
+  ([internal-marshaller]
+   (let [marshaller (or internal-marshaller (edn-object-marshaller))]
+     (->CompactObjectMarshaller marshaller)))
+  ([]
+   (compact-object-marshaller nil)))

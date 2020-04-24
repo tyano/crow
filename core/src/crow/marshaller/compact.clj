@@ -9,18 +9,6 @@
             [msgpack.clojure-extensions]))
 
 
-(defrecord FieldId [id])
-
-(extend-msgpack FieldId 40
-  [obj]
-  (pack (:id obj))
-  [bytedata]
-  (FieldId. (unpack bytedata)))
-
-(defn field-id?
-  [obj]
-  (instance? FieldId obj))
-
 (defrecord ContextChange [keymap])
 
 (extend-msgpack ContextChange 41
@@ -39,12 +27,11 @@
    (fn [{::keys [keymap last-field-id added-keymap] :or {keymap {}, last-field-id 0, added-keymap {}} :as ctx} k]
      (if (contains? keymap k)
        ctx
-       (let [new-id (inc last-field-id)
-             field-id (->FieldId new-id)]
+       (let [new-id (inc last-field-id)]
          (-> ctx
              (assoc ::last-field-id new-id)
-             (update ::keymap assoc k field-id)
-             (update ::added-keymap assoc k field-id)))))
+             (update ::keymap assoc k new-id)
+             (update ::added-keymap assoc k new-id)))))
    context
    keys))
 
@@ -103,7 +90,7 @@
   :context is next context object."
   [context mapdata]
   ;; convert all keys in a map from field-id to keyword
-  ;; ::keymap is a map of keyword -> FieldId.
+  ;; ::keymap is a map of keyword -> Number.
   ;; we must invert it before resolving a map.
   (let [inverted (update context ::keymap map-invert)
         {:keys [context resolved]} (reduce
@@ -130,7 +117,7 @@
   (cond
     (context-change? obj)
     (do
-      (debug-pr "context! " obj)
+      (trace-pr "context! " obj)
       {:context  (update context ::keymap merge (:keymap obj))
        :data     []})
 
@@ -163,7 +150,7 @@
   Not empty objects always are returned as a vector containing one unmarshalled object."
   [context obj]
   (let [{:keys [data], new-context :context} (resolve-with-context context obj)]
-    (debug-pr "unmarshalled:" data)
+    (trace-pr "unmarshalled:" data)
     #::marshaller{:context new-context
                   :data data}))
 
@@ -175,7 +162,7 @@
   always a vector."
   [context obj]
   (let [{{::keys [added-keymap] :as new-context} :context data :data} (compact-with-context context obj)]
-    (debug-pr "marshalled:" data)
+    (trace-pr "marshalled:" data)
     #::marshaller{:context (dissoc new-context ::added-keymap)
                   :data    (if (seq added-keymap)
                              [(ContextChange. added-keymap) data]

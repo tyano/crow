@@ -5,8 +5,7 @@
             [crow.marshaller.edn :refer [edn-object-marshaller]]
             [crow.logging :refer [trace-pr debug-pr]]
             [msgpack.core :refer [pack unpack] :as msgpack]
-            [msgpack.macros :refer [extend-msgpack]]
-            [msgpack.clojure-extensions]))
+            [msgpack.macros :refer [extend-msgpack]]))
 
 
 (defrecord ContextChange [keymap])

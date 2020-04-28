@@ -85,26 +85,23 @@
 
 (defn- resolve-map-with-context
   "Uncompact mapdata with context and returns a map with keys :context and :data.
-  the value of :data key is A VECTOR of a resolved (uncompacted) map object.
-  :context is next context object."
+  :context is a next context.
+  :data is a map all key and value are resolved."
   [context mapdata]
-  ;; convert all keys in a map from field-id to keyword
   ;; ::keymap is a map of keyword -> Number.
   ;; we must invert it before resolving a map.
-  (let [inverted (update context ::keymap map-invert)
-        {:keys [context resolved]} (reduce
-                                    (fn [{:keys [context] :as r} [k v]]
-                                      (let [new-key (get (::keymap inverted) k k)
-                                            {key-context :context [unmarshalled-key] :data} (resolve-with-context context new-key)
-                                            {next-context :context [data] :data} (resolve-with-context key-context v)]
-                                        (-> r
-                                            (update :resolved assoc unmarshalled-key data)
-                                            (assoc :context next-context))))
-                                    {:context  context
-                                     :resolved {}}
-                                    mapdata)]
-    {:context context
-     :data [resolved]}))
+  (let [inverted (update context ::keymap map-invert)]
+    (reduce
+     (fn [{:keys [context] :as r} [k v]]
+       (let [new-key (get (::keymap inverted) k k)
+             {key-context :context [unmarshalled-key] :data} (resolve-with-context context new-key)
+             {next-context :context [data] :data} (resolve-with-context key-context v)]
+         (-> r
+             (update :data assoc unmarshalled-key data)
+             (assoc :context next-context))))
+     {:context context
+      :data {}}
+     mapdata)))
 
 (defn- resolve-with-context
   "Resolve compacted objects with context.
@@ -121,7 +118,8 @@
        :data     []})
 
     (map? obj)
-    (resolve-map-with-context context obj)
+    (-> (resolve-map-with-context context obj)
+        (update :data vector))
 
     (sequential? obj)
     (-> (reduce

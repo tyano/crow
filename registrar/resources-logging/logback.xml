@@ -8,7 +8,6 @@
   </appender>
 
   <logger name="crow" level="DEBUG" />
-  <logger name="aleph" level="INFO" />
   <logger name="io.netty" level="INFO" />
   <logger name="com.shelf.messagepack" level="INFO" />
 

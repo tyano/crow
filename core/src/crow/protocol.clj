@@ -4,7 +4,7 @@
             [msgpack.macros :refer [extend-msgpack]]
             [clj-time.core :refer [year month day hour minute second date-time]]
             [clojure.edn :as edn]
-            [crow.logging :refer [trace-pr]]
+            [crow.logging :refer [trace-pr info-pr]]
             [crow.marshaller :refer [marshal unmarshal] :as marshal]
             [crow.marshaller.compact :refer [compact-object-marshaller]]
             [clojure.tools.logging :as log])
@@ -40,6 +40,7 @@
 (defn install-default-marshaller
   [marshaller]
   (alter-var-root #'*object-marshaller* (fn [_] marshaller))
+  (info-pr "default object marshaller is installed:" marshaller)
   marshaller)
 
 (defn date->bytes
@@ -192,40 +193,6 @@
 (defn invalid-message [msg] (InvalidMessage. msg))
 
 
-(defrecord RemoteCall [target-ns fn-name args])
-
-(extend-msgpack RemoteCall type-remote-call
-  [ent]
-  (let [{marshalled-args :data} (reduce
-                                 (fn [{marshalling-context :context :as rv} arg]
-                                   (let [{::marshal/keys [context data]} (marshal *object-marshaller* marshalling-context arg)]
-                                     (-> rv
-                                         (assoc :context context)
-                                         (update :data concat data))))
-                                 {:context {}
-                                  :data []}
-                                 (:args ent))]
-    (pack-and-combine (:target-ns ent)
-                      (:fn-name ent)
-                      marshalled-args))
-  [data]
-  (let [[target-ns fn-name args]  (unpack-n 3 data)
-        {unmarshalled-args :data} (reduce
-                                   (fn [{marshalling-context :context :as rv} arg]
-                                     (let [{::marshal/keys [context data]} (unmarshal *object-marshaller* marshalling-context arg)]
-                                       (-> rv
-                                           (assoc :context context)
-                                           (update :data concat data))))
-                                   {:context {}
-                                    :data []}
-                                   args)]
-    (RemoteCall. target-ns fn-name unmarshalled-args)))
-
-(defn remote-call
-  [target-ns fn-name args]
-  (RemoteCall. target-ns fn-name args))
-
-
 (defn- unmarshal-one
   [current-context marshalled-array]
   (let [{:keys [result context]} (reduce
@@ -239,6 +206,25 @@
                                   marshalled-array)]
     {:context context
      :result  (first result)}))
+
+
+(defrecord RemoteCall [target-ns fn-name args])
+
+(extend-msgpack RemoteCall type-remote-call
+  [ent]
+  (let [{marshalled-args ::marshal/data} (marshal *object-marshaller* {} (:args ent))]
+    (pack-and-combine (:target-ns ent)
+                      (:fn-name ent)
+                      marshalled-args))
+  [data]
+  (let [[target-ns fn-name args] (unpack-n 3 data)
+        {unmarshalled-args :result} (unmarshal-one {} args)]
+    (RemoteCall. target-ns fn-name unmarshalled-args)))
+
+(defn remote-call
+  [target-ns fn-name args]
+  (RemoteCall. target-ns fn-name args))
+
 
 (defrecord CallResult [obj])
 

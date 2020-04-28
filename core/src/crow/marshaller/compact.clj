@@ -139,19 +139,32 @@
     :else
     {:context context
      :data (-> (unmarshal internal-marshaller context obj)
-               ::marshaller/data)}))
+               ::marshaller/data
+               vector)}))
 
+;;; Unmarshaling a marshalled array with context.
+;;; marshalled-array contains information unmarshalling an object, so the result of unmarshalling an marshalled-array
+;;; always become one object.
+;;;
+;;; Some marshalled objects in marshalled array contains no value but contains information for uncompacting next objects.
+;;; resolve-with-context returns an empty vector as such no-value result.
+;;; This function concat the results of resolve-of-context to a vector, so that such empty vector will be
+;;; eliminated and then remains only one item on the vector. we can get one resolved result from the vector by calling 'first' on it.
 (defn unmarshal-data
-  "Unmarshaling a marshalled object with context.
-  Return value of this function is always a vector.
-  Some marshalled object contains no value but contains information for uncompacting next objects.
-  Such no-value object will be returned as an empty vector.
-  Not empty objects always are returned as a vector containing one unmarshalled object."
-  [context obj]
-  (let [{:keys [data], new-context :context} (resolve-with-context context obj)]
-    (trace-pr "unmarshalled:" data)
-    #::marshaller{:context new-context
-                  :data data}))
+  "Unmarshaling a marshalled array with context."
+  [current-context marshalled-array]
+  (let [{:keys [result context]} (reduce
+                                  (fn [{:keys [context] :as rv} v]
+                                    (let [{:keys [data], new-context :context} (resolve-with-context context v)]
+                                      (-> rv
+                                          (assoc :context new-context)
+                                          (update :result concat data))))
+                                  {:context current-context
+                                   :result  []}
+                                  marshalled-array)]
+    (trace-pr "unmarshalled:" result)
+    #::marshaller{:context context
+                  :data (first result)}))
 
 (defn marshal-data
   "Marshalling a object with context.

@@ -192,22 +192,6 @@
 
 (defn invalid-message [msg] (InvalidMessage. msg))
 
-
-(defn- unmarshal-one
-  [current-context marshalled-array]
-  (let [{:keys [result context]} (reduce
-                                  (fn [{:keys [context] :as rv} v]
-                                    (let [{data-array ::marshal/data, new-context ::marshal/context} (unmarshal *object-marshaller* context v)]
-                                      (-> rv
-                                          (assoc :context new-context)
-                                          (update :result concat data-array))))
-                                  {:context current-context
-                                   :result  []}
-                                  marshalled-array)]
-    {:context context
-     :result  (first result)}))
-
-
 (defrecord RemoteCall [target-ns fn-name args])
 
 (extend-msgpack RemoteCall type-remote-call
@@ -218,7 +202,7 @@
                       marshalled-args))
   [data]
   (let [[target-ns fn-name args] (unpack-n 3 data)
-        {unmarshalled-args :result} (unmarshal-one {} args)]
+        {unmarshalled-args ::marshal/data} (unmarshal *object-marshaller* {} args)]
     (RemoteCall. target-ns fn-name unmarshalled-args)))
 
 (defn remote-call
@@ -234,7 +218,7 @@
     (pack marshalled-array))
   [data]
   (let [marshalled-array (unpack data)
-        {:keys [result]} (unmarshal-one {} marshalled-array)]
+        {result ::marshal/data} (unmarshal *object-marshaller* {} marshalled-array)]
     (CallResult. result)))
 
 (defn call-result
@@ -313,12 +297,12 @@
 
         current-context  (or (get-sequential-context id) {})
 
-        {:keys [result], new-context :context}
-        (unmarshal-one current-context marshalled-objects)
+        {::marshal/keys [data], new-context ::marshal/context}
+        (unmarshal *object-marshaller* current-context marshalled-objects)
 
-        _ (trace-pr "item: " (pr-str result))]
+        _ (trace-pr "item: " (pr-str data))]
     (set-sequential-context! id new-context)
-    (SequentialItem. id result)))
+    (SequentialItem. id data)))
 
 (defn sequential-item
   [sequence-id obj]

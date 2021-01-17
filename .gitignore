@@ -12,3 +12,4 @@ crow.sublime-workspace
 *.iml
 .idea/
 .#*
+.DS_Store

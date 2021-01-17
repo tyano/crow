@@ -1,4 +1,4 @@
-(defproject crow/service "2.5.0-SNAPSHOT"
+(defproject crow/service "2.5.1-SNAPSHOT"
   :license {:name "Eclipse Public License"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
   :dependencies [[org.clojure/clojure "_" :upgrade false]

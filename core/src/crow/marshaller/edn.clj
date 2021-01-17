@@ -50,7 +50,7 @@
 (defrecord EdnObjectMarshaller
   [edn-opts]
   ObjectMarshaller
-  (marshal [this context obj] #::marshal{:context context :data [(marshal-data edn-opts obj)]})
+  (marshal [this context obj] #::marshal{:context context :data (marshal-data edn-opts obj)})
   (unmarshal [this context obj] #::marshal{:context context :data (unmarshal-data edn-opts obj)}))
 
 (defn edn-object-marshaller

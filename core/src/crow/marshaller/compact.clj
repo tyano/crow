@@ -80,8 +80,7 @@
     :else
     {:context context
      :data (-> (marshal internal-marshaller context obj)
-               ::marshaller/data
-               first)}))
+               ::marshaller/data)}))
 
 (defn- resolve-map-with-context
   "Uncompact mapdata with context and returns a map with keys :context and :data.
